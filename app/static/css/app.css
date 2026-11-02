@@ -137,3 +137,15 @@ footer { border-top: 1px solid var(--line); padding: 18px 34px; color: var(--mut
   .section-heading { flex-wrap: wrap; } .resource-strip { gap: 12px; }
   .auth-card { margin-top: 24px; padding: 25px; } footer { padding: 16px; }
 }
+
+/* Installation wizard uses the existing panel and badge theme. */
+.installation-code { white-space: pre; overflow: auto; max-height: 34rem; padding: 1.2rem; border: 1px solid var(--line); border-radius: 10px; background: #101820; color: #e1e9ef; font-size: .8rem; line-height: 1.6; }
+.installation-code code { white-space: pre; background: none; padding: 0; }
+.bash-comment { color: #89ac99; }
+.bash-token { color: #edc58c; }
+.badge.ACTIVE, .badge.READY { background: #174b3e; color: #a5f0d5; }
+.badge.PENDING_SETUP, .badge.INSTALLING, .badge.VERIFYING { background: #263f60; color: #c0dcff; }
+.badge.INSTALLATION_FAILED, .badge.CONNECTION_FAILED { background: #5b2630; color: #ffccd4; }
+.badge.DISABLED { background: #39414a; color: #d5dce3; }
+button:disabled { opacity: .5; cursor: wait; }
+[hidden] { display: none !important; }

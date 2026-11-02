@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% from 'macros.html' import status %}
+{% block title %}Підключення {{ server.name }}{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', filename='js/setup.js') }}" defer></script>
+{% endblock %}
+{% block content %}
+  <div id="setup-wizard"
+       data-server-id="{{ server.id }}"
+       data-status="{{ server.installation_status }}">
+    <div class="page-heading">
+      <div>
+        <p class="eyebrow">КРОК 2 ІЗ 3 · {{ server.name }}</p>
+        <h1>Встановлення ServerWatch на клієнтський сервер</h1>
+        <p class="muted">Скопіюйте скрипт, підключіться до {{ server.ip_address }}:{{ server.ssh_port }} як {{ server.installation_user }} та виконайте у Bash від root або з sudo.</p>
+      </div>
+      <a href="{{ url_for('servers.detail', server_id=server.id) }}">Картка сервера →</a>
+    </div>
+    <section class="panel">
+      <div class="section-heading">
+        <h2>Стан підключення</h2>
+        <span id="setup-badge">{{ status(server.installation_status) }}</span>
+      </div>
+      <p id="setup-message" role="status" aria-live="polite">{{ server.installation_error or 'Після виконання скрипта worker автоматично перевірить SSH і збір метрик.' }}</p>
+      <p class="small muted">Приватний SSH-ключ залишається на центральному сервері в зашифрованому вигляді.</p>
+    </section>
+    {% if script %}
+      <section class="panel">
+        <div class="section-heading">
+          <h2>Готовий Bash-скрипт</h2>
+          <div class="row">
+            <button type="button" id="copy-installation">Скопіювати весь скрипт</button><button type="button" class="secondary" id="download-installation">Завантажити .sh</button>
+          </div>
+        </div>
+        <p class="small muted">Скрипт містить секретний одноразовий токен на 1 годину. Не публікуйте його. Приватного ключа у скрипті немає.</p>
+        <pre class="installation-code"
+             tabindex="0"><code id="installation-script">{{ script }}</code></pre>
+        <ol>
+          <li>Відкрийте термінал.</li>
+          <li>Підключіться до клієнтського сервера.</li>
+          <li>Вставте весь скрипт або виконайте завантажений файл через bash.</li>
+          <li>Дочекайтеся повідомлення про запит перевірки SSH.</li>
+          <li>Поверніться сюди: крок Telegram відкриється після успішного збору метрик.</li>
+        </ol>
+      </section>
+    {% elif server.installation_status not in ["VERIFYING", "READY"] %}
+      <section class="panel">
+        <h2>Видати новий скрипт</h2>
+        <p>Токен попереднього скрипта повторно не показується. Новий випуск анулює його; SSH-ключ залишиться тим самим.</p>
+        <form method="post"
+              action="{{ url_for('servers.reissue_script', server_id=server.id) }}">
+          <input type="hidden"
+                 name="csrf_token"
+                 value="{{ csrf_token() }}"><button>Створити новий скрипт</button>
+        </form>
+      </section>
+    {% endif %}
+    <section class="panel" id="setup-retry" hidden>
+      <p>Виправте причину у клієнтському терміналі та отримайте новий скрипт для повторної спроби.</p>
+      <form method="post"
+            action="{{ url_for('servers.reissue_script', server_id=server.id) }}">
+        <input type="hidden"
+               name="csrf_token"
+               value="{{ csrf_token() }}"><button>Видати новий скрипт</button>
+      </form>
+    </section>
+    <form id="setup-telegram"
+          method="post"
+          action="{{ url_for('servers.regenerate_code', server_id=server.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="secondary"
+                                                                                                                                                           {% if server.installation_status != "READY" %}disabled{% endif %}>Перейти до Telegram після перевірки</button></form>
+  </div>
+{% endblock %}

@@ -21,7 +21,12 @@ def collect_server(server):
     command += SOURCE + "\nSERVERWATCH_COLLECT"
     with connect(server) as client:
         try:
-            data = json.loads(execute(client, command, timeout=90))
+            if server.ssh_public_key:
+                payload = json.dumps({"services": server.services, "since": stamp})
+                output = execute(client, "serverwatch-collect", timeout=90, input_data=payload)
+            else:
+                output = execute(client, command, timeout=90)
+            data = json.loads(output)
             for field in ("cpu_usage", "ram_percent", "swap_percent", "disk_percent"):
                 if not isinstance(data[field], (int, float)) or not math.isfinite(data[field]):
                     raise ValueError

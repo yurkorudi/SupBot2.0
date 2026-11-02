@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Новий сервер{% endblock %}
+{% block content %}
+  <div class="page-heading">
+    <div>
+      <p class="eyebrow">КРОК 1 ІЗ 3 · НОВЕ ПІДКЛЮЧЕННЯ</p>
+      <h1>Інформація про сервер</h1>
+      <p class="muted">Створимо окремий SSH-ключ і готовий скрипт встановлення. Вручну генерувати ключі не потрібно.</p>
+    </div>
+  </div>
+  <form method="post" class="panel form-panel">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-grid">
+      <label>
+        Назва сервера<input name="name"
+                            maxlength="100"
+                            required
+                            value="{{ request.form.get('name', '') }}"
+                            placeholder="Production Server 01">
+      </label>
+      <label>
+        Клієнт або група<input name="client_name"
+                               maxlength="100"
+                               value="{{ request.form.get('client_name', '') }}">
+      </label>
+      <label>
+        Публічна IPv4-адреса<input name="ip_address"
+                                   required
+                                   value="{{ request.form.get('ip_address', '') }}">
+      </label>
+      <label>
+        SSH-порт<input name="ssh_port"
+                       type="number"
+                       min="1"
+                       max="65535"
+                       required
+                       value="{{ request.form.get('ssh_port', 22) }}">
+      </label>
+      <label>
+        Користувач встановлення<input name="installation_user"
+                                      maxlength="32"
+                                      required
+                                      value="{{ request.form.get('installation_user', 'root') }}"><small>Виконайте скрипт у його терміналі. Для іншого користувача потрібен sudo. Моніторинг працюватиме як monitor.</small>
+      </label>
+      <label>
+        Інтервал моніторингу, секунди<input name="monitoring_interval"
+                                            type="number"
+                                            min="60"
+                                            max="86400"
+                                            required
+                                            value="{{ request.form.get('monitoring_interval', 180) }}">
+      </label>
+      <label>
+        Telegram Group ID<input name="telegram_group_id"
+                                value="{{ request.form.get('telegram_group_id', '') }}"><small>Можна залишити порожнім: бот отримає ID групи під час /bind.</small>
+      </label>
+      <label>
+        Systemd-сервіси<input name="services"
+                              value="{{ request.form.get('services', '') }}"
+                              placeholder="nginx.service, mysql.service">
+      </label>
+    </div>
+    <label class="check"><input name="enable_swap"
+                                type="checkbox"
+                                {% if request.form.get('enable_swap') %}checked{% endif %}>Дозволити адміністратору кнопку SWAP +1 GB</label>
+    <p class="small muted">Опція встановлює лише обмежений helper і sudo-правило. Сам SWAP зараз не створюється.</p>
+    <div class="form-actions">
+      <button>Створити сервер →</button><a href="{{ url_for('servers.index') }}">Скасувати</a>
+    </div>
+  </form>
+{% endblock %}

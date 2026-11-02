@@ -48,6 +48,8 @@ def request_swap(alert_id, group_id, user_id):
     db.session.execute(db.select(Server.id).where(Server.id == server.id).with_for_update())
     if not server.is_active or server.status == "offline":
         raise ValueError("Сервер недоступний або моніторинг вимкнено.")
+    if server.ssh_public_key and not server.swap_enabled:
+        raise ValueError("SWAP не дозволено під час встановлення цього сервера.")
     existing = db.session.scalar(
         db.select(Job.id).where(Job.server_id == server.id, Job.status.in_(["pending", "running"]))
     )
@@ -63,7 +65,8 @@ def execute_swap(job, server):
     try:
         with connect(server) as client:
             original_timeout = current_app.config["SSH_TIMEOUT"]
-            response = json.loads(execute(client, COMMAND, timeout=max(original_timeout, 120)))
+            command = "serverwatch-swap" if server.ssh_public_key else COMMAND
+            response = json.loads(execute(client, command, timeout=max(original_timeout, 120)))
         if not isinstance(response, dict):
             raise ValueError
         success = response.get("status") in ("created", "already_active")

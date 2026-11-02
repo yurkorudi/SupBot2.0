@@ -16,6 +16,15 @@
     <a class="button secondary"
        href="{{ url_for('servers.edit',server_id=server.id) }}">Налаштувати</a>
   </div>
+  <section class="panel">
+    <div class="section-heading">
+      <h2>Підключення</h2>
+      {{ status(server.installation_status) }}
+    </div>
+    {% if server.installation_error %}<p class="notice error">{{ server.installation_error }}</p>{% endif %}
+    {% if server.ssh_public_key and server.installation_status != "ACTIVE" %}<a class="button secondary"
+                                                                                href="{{ url_for('servers.setup', server_id=server.id) }}">Продовжити підключення</a>{% endif %}
+  </section>
   {% if server.last_error %}
     <div class="notice error">{{ server.last_error }}</div>
   {% endif %}

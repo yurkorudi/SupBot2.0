@@ -5,13 +5,15 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import or_, update
+from sqlalchemy import and_, or_, update
 
 from app import create_app
 from app.extensions import db
 from app.models import Job, Server, ServerLog, ServerMetric, utcnow
 from app.services.alert_manager import connection_failed, enqueue, evaluate, setting, update_alert
+from app.services.installation import expire_installations
 from app.services.report_generator import report
+from app.services.security import audit
 from app.services.ssh_client import SSHFailure
 from app.services.swap_manager import execute_swap
 
@@ -23,8 +25,15 @@ logger = logging.getLogger(__name__)
 
 def monitor_one(server_id):
     server = db.session.get(Server, server_id)
-    if not server:
+    if not server or not (
+        server.installation_status == "VERIFYING"
+        or (
+            server.is_active
+            and server.installation_status in ("READY", "ACTIVE", "CONNECTION_FAILED")
+        )
+    ):
         return
+    verifying = server.installation_status == "VERIFYING"
     data = None
     failure = "SSH-з’єднання недоступне."
     for attempt in range(2):
@@ -35,9 +44,19 @@ def monitor_one(server_id):
             failure = str(error)
             if attempt == 0:
                 time.sleep(2)
+    db.session.refresh(server, attribute_names=["installation_status", "is_active"])
     now = utcnow()
+    if server.installation_status not in ("VERIFYING", "READY", "ACTIVE", "CONNECTION_FAILED"):
+        server.lease_until = None
+        db.session.commit()
+        return
     if data is None:
         connection_failed(server, failure)
+        server.installation_status = "CONNECTION_FAILED"
+        if verifying:
+            server.installation_error = failure
+            server.is_active = False
+            audit("monitor", "installation_connection_failed", failure, server.id)
     else:
         metric = ServerMetric(server_id=server.id, **data)
         db.session.add(metric)
@@ -64,6 +83,12 @@ def monitor_one(server_id):
                     )
                 )
         server.last_success_at, server.last_error = now, None
+        server.installation_status = "ACTIVE" if server.is_authorized else "READY"
+        if verifying:
+            server.installation_completed_at = now
+            server.installation_error = None
+            server.is_active = True
+            audit("monitor", "installation_ready", "SSH і збір метрик перевірено", server.id)
         update_alert(server, "connection", None, "")
         evaluate(server, metric)
         aggregate_hour(server.id, metric.collected_at.replace(minute=0, second=0, microsecond=0))
@@ -86,13 +111,23 @@ def process_server(app, server_id):
             db.session.remove()
 
 
+def eligible_servers():
+    return or_(
+        Server.installation_status == "VERIFYING",
+        and_(
+            Server.is_active.is_(True),
+            Server.installation_status.in_(["READY", "ACTIVE", "CONNECTION_FAILED"]),
+        ),
+    )
+
+
 def claim_server(server_id):
     now = utcnow()
     result = db.session.execute(
         update(Server)
         .where(
             Server.id == server_id,
-            Server.is_active.is_(True),
+            eligible_servers(),
             Server.next_check_at <= now,
             or_(Server.lease_until.is_(None), Server.lease_until < now),
         )
@@ -151,6 +186,7 @@ def main():
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stopped.set())
     cleanup_at = 0
+    setup_cleanup_at = 0
     futures = set()
     with ThreadPoolExecutor(max_workers=app.config["MONITOR_CONCURRENCY"]) as pool:
         while not stopped.is_set():
@@ -160,6 +196,9 @@ def main():
                     free = app.config["MONITOR_CONCURRENCY"] - len(futures)
                     if free:
                         process_job()
+                    if time.monotonic() >= setup_cleanup_at:
+                        expire_installations()
+                        setup_cleanup_at = time.monotonic() + 60
                     if time.monotonic() >= cleanup_at:
                         cleanup()
                         cleanup_at = time.monotonic() + 3600
@@ -168,7 +207,7 @@ def main():
                         db.session.scalars(
                             db.select(Server.id)
                             .where(
-                                Server.is_active.is_(True),
+                                eligible_servers(),
                                 Server.next_check_at <= now,
                                 or_(Server.lease_until.is_(None), Server.lease_until < now),
                             )

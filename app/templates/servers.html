@@ -32,14 +32,14 @@
               </td>
               <td>{{ server.ip_address }}:{{ server.ssh_port }}</td>
               <td>{{ server.client_name or '—' }}</td>
-              <td>{{ status(server.status) }}{% if not server.is_active %}
+              <td>{{ status(server.installation_status) }} {{ status(server.status) }}{% if not server.is_active %}
                 <small>Моніторинг вимкнено</small>
           {% endif %}
         </td>
         <td>{{ server.monitoring_interval }} с</td>
         <td>Ключ збережено</td>
         <td>
-          <a href="{{ url_for('servers.edit',server_id=server.id) }}">Змінити →</a>
+          {% if server.ssh_public_key and server.installation_status != "ACTIVE" %}<a href="{{ url_for('servers.setup',server_id=server.id) }}">Підключення →</a>{% else %}<a href="{{ url_for('servers.edit',server_id=server.id) }}">Змінити →</a>{% endif %}
         </td>
       </tr>
 {% else %}

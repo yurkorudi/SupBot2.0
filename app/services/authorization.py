@@ -19,6 +19,8 @@ def code_hash(code):
 
 
 def issue_code(server):
+    if server.ssh_public_key and server.installation_status not in ("READY", "ACTIVE"):
+        raise ValueError("Спочатку дочекайтеся успішної SSH-перевірки.")
     for _ in range(10):
         code = f"{secrets.randbelow(10**15):015d}"
         digest = code_hash(code)
@@ -51,6 +53,9 @@ def authorize_group(code, group_id, user_id):
         db.session.rollback()
         failed(key)
         raise ValueError("Код недійсний, прострочений або призначений іншій групі.")
+    if server.ssh_public_key and server.installation_status not in ("READY", "ACTIVE"):
+        db.session.rollback()
+        raise ValueError("SSH ще не підтверджений або сервер вимкнений.")
     result = db.session.execute(
         update(Server)
         .where(
@@ -61,6 +66,8 @@ def authorize_group(code, group_id, user_id):
         .values(
             telegram_group_id=group_id,
             is_authorized=True,
+            installation_status="ACTIVE",
+            telegram_authorized_at=utcnow(),
             authorization_code_hash=None,
             authorization_expires_at=None,
         )

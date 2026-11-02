@@ -30,7 +30,7 @@ def create_app(test_config=None):
     login.login_message = "Увійдіть, щоб продовжити."
     from .cli import register_commands
     from .models import User
-    from .routes import auth, dashboard, servers, settings
+    from .routes import auth, dashboard, installations, servers, settings
 
     @login.user_loader
     def load_user(user_id):
@@ -39,7 +39,7 @@ def create_app(test_config=None):
         except (TypeError, ValueError):
             return None
 
-    for blueprint in (auth.bp, dashboard.bp, servers.bp, settings.bp):
+    for blueprint in (auth.bp, dashboard.bp, installations.bp, servers.bp, settings.bp):
         app.register_blueprint(blueprint)
     register_commands(app)
 

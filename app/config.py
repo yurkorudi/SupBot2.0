@@ -8,6 +8,7 @@ def configuration():
     load_dotenv()
     return {
         "SECRET_KEY": os.getenv("SECRET_KEY", ""),
+        "PUBLIC_BASE_URL": os.getenv("PUBLIC_BASE_URL", ""),
         "ENCRYPTION_KEY": os.getenv("ENCRYPTION_KEY", ""),
         "SQLALCHEMY_DATABASE_URI": os.getenv("DATABASE_URL", ""),
         "SQLALCHEMY_TRACK_MODIFICATIONS": False,

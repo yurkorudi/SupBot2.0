@@ -18,11 +18,11 @@ async def start(message: Message, backend):
             "Додайте бота до групи клієнта. Авторизація доступна головному адміністратору."
         )
         return
-    reports = await backend.reports(message.chat.id)
+    bound = await backend.is_bound(message.chat.id)
     await message.answer(
         "Група вже підключена. /status — стан серверів.\n"
         "Для додаткового сервера адміністратор може надіслати код командою /bind КОД."
-        if reports
+        if bound
         else "Сервер ще не авторизований. Головний адміністратор має "
         "надіслати 15-значний код або /bind КОД."
     )

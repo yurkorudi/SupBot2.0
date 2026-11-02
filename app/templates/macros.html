@@ -1,5 +1,5 @@
 {% macro status(value) %}
-  <span class="badge {{ value }}">{{ {'online':'Онлайн','offline':'Недоступний','warning':'Увага','pending':'Очікує перевірки','critical':'Критично','open':'Відкрита','resolved':'Вирішена','acknowledged':'У роботі'}.get(value, value) }}</span>
+  <span class="badge {{ value }}">{{ {'PENDING_SETUP':'Очікує встановлення','INSTALLING':'Встановлення','VERIFYING':'Перевірка SSH','READY':'Готовий до Telegram','ACTIVE':'Підключено','INSTALLATION_FAILED':'Помилка встановлення','CONNECTION_FAILED':'SSH недоступний','DISABLED':'Вимкнено','online':'Онлайн','offline':'Недоступний','warning':'Увага','pending':'Очікує перевірки','critical':'Критично','open':'Відкрита','resolved':'Вирішена','acknowledged':'У роботі'}.get(value, value) }}</span>
 {% endmacro %}
 {% macro pagination(page) %}
   <div class="pagination">

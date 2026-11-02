@@ -40,6 +40,7 @@
       <label>
         SSH-користувач<input name="ssh_username"
                              value="{{ server.ssh_username if server else 'serverwatch' }}"
+                             {% if server and server.ssh_public_key %}readonly{% endif %}
                              required
                              maxlength="32">
       </label>
@@ -63,10 +64,14 @@
                               placeholder="nginx.service, mysql.service">
       </label>
     </div>
-    <label>SSH-приватний ключ {{ '— заміна' if server else '' }}<textarea name="private_key" rows="7" autocomplete="off" spellcheck="false" {% if not server %}required{% endif %} placeholder="{{ 'Ключ збережено. Залиште порожнім, щоб зберегти поточний.' if server else '-----BEGIN OPENSSH PRIVATE KEY-----' }}">
+    {% if not server or not server.ssh_public_key %}
+      <label>SSH-приватний ключ {{ '— заміна' if server else '' }}<textarea name="private_key" rows="7" autocomplete="off" spellcheck="false" {% if not server %}required{% endif %} placeholder="{{ 'Ключ збережено. Залиште порожнім, щоб зберегти поточний.' if server else '-----BEGIN OPENSSH PRIVATE KEY-----' }}">
 </textarea>
-      <small>Ключ шифрується перед записом. Повторно переглянути його неможливо. Хост має бути в перевіреному known_hosts.</small>
-    </label>
+        <small>Ключ шифрується перед записом. Повторно переглянути його неможливо. Хост має бути в перевіреному known_hosts.</small>
+      </label>
+    {% else %}
+      <p class="small muted">Індивідуальний Ed25519 згенеровано системою. Fingerprint: {{ server.ssh_key_fingerprint }}. Приватний ключ недоступний для перегляду.</p>
+    {% endif %}
     {% if server %}
       <h2>Пороги сповіщень, %</h2>
       <div class="form-grid">
@@ -87,7 +92,7 @@
              {% if server.is_active %}checked{% endif %}>Моніторинг увімкнено</label>
     {% endif %}
     <div class="form-actions">
-      <button>Перевірити SSH та зберегти</button>
+      <button>Зберегти налаштування</button>
       <a href="{{ url_for('servers.index') }}">Скасувати</a>
     </div>
   </form>

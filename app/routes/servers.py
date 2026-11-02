@@ -1,13 +1,18 @@
+import re
+
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 
 from app.extensions import db
-from app.models import Alert, Server, ServerLog
+from app.models import Alert, Server, ServerLog, utcnow
 from app.services.authorization import issue_code
 from app.services.encryption import encrypt
+from app.services.installation import issue_installation_token, public_base_url
+from app.services.installation_script import installation_script
 from app.services.report_generator import latest_metric
 from app.services.security import audit
 from app.services.ssh_client import SSHFailure, connect, parse_private_key
+from app.services.ssh_key_manager import generate_keypair
 from app.services.validation import server_fields, threshold_fields
 
 bp = Blueprint("servers", __name__)
@@ -25,22 +30,80 @@ def index():
 def add():
     if request.method == "POST":
         try:
-            fields = server_fields(request.form)
-            key = request.form.get("private_key", "").strip()
-            parse_private_key(key)
-            server = Server(**fields, ssh_private_key_encrypted=encrypt(key))
-            with connect(server, private_key=key):
-                pass
+            public_base_url()
+            fields = server_fields({**request.form, "ssh_username": "monitor"})
+            installer = request.form.get("installation_user", "root").strip()
+            if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", installer):
+                raise ValueError("Некоректний користувач встановлення.")
+            server = Server(
+                **fields,
+                ssh_private_key_encrypted="",
+                installation_user=installer,
+                installation_status="PENDING_SETUP",
+                is_active=False,
+                swap_enabled=request.form.get("enable_swap") == "on",
+            )
             db.session.add(server)
             db.session.flush()
-            code = issue_code(server)
-            audit(current_user.id, "server_added", "SSH перевірено; ключ зашифровано", server.id)
+            generate_keypair(server)
+            token = issue_installation_token(server, current_user.id)
+            script = installation_script(server, token)
+            audit(
+                current_user.id,
+                "server_added",
+                "Створено індивідуальний Ed25519; очікується скрипт",
+                server.id,
+            )
             db.session.commit()
-            return render_template("authorization_code.html", server=server, code=code)
-        except (ValueError, SSHFailure) as error:
+            return render_template("server_setup.html", server=server, script=script)
+        except ValueError as error:
             db.session.rollback()
             flash(str(error), "error")
-    return render_template("server_form.html", server=None)
+    return render_template("server_add.html")
+
+
+@bp.get("/servers/<int:server_id>/setup")
+@login_required
+def setup(server_id):
+    server = db.get_or_404(Server, server_id)
+    if not server.ssh_public_key or server.installation_status == "ACTIVE":
+        return redirect(url_for("servers.detail", server_id=server.id))
+    return render_template("server_setup.html", server=server, script=None)
+
+
+@bp.post("/servers/<int:server_id>/setup/script")
+@login_required
+def reissue_script(server_id):
+    server = db.get_or_404(Server, server_id)
+    if not server.ssh_public_key:
+        return render_template(
+            "error.html", message="Цей сервер використовує попередній спосіб SSH."
+        ), 409
+    try:
+        token = issue_installation_token(server, current_user.id)
+        script = installation_script(server, token)
+        db.session.commit()
+        return render_template("server_setup.html", server=server, script=script)
+    except ValueError as error:
+        db.session.rollback()
+        flash(str(error), "error")
+        return redirect(url_for("servers.setup", server_id=server.id))
+
+
+@bp.get("/api/servers/<int:server_id>/setup-status")
+@login_required
+def setup_status(server_id):
+    server = db.get_or_404(Server, server_id)
+    return jsonify(
+        status=server.installation_status,
+        error=server.installation_error,
+        expired=bool(
+            server.installation_status in ("PENDING_SETUP", "INSTALLING")
+            and server.installation_token_expires_at
+            and server.installation_token_expires_at <= utcnow()
+        ),
+        authorized=server.is_authorized,
+    )
 
 
 @bp.route("/servers/<int:server_id>/edit", methods=["GET", "POST"])
@@ -49,7 +112,11 @@ def edit(server_id):
     server = db.get_or_404(Server, server_id)
     if request.method == "POST":
         try:
-            fields = server_fields(request.form)
+            fields = server_fields(
+                {**request.form, "ssh_username": "monitor"}
+                if server.ssh_public_key
+                else request.form
+            )
             thresholds = threshold_fields(request.form, server.thresholds)
             group_changed = fields["telegram_group_id"] != server.telegram_group_id
             ssh_changed = any(
@@ -59,8 +126,17 @@ def edit(server_id):
             for key, value in fields.items():
                 setattr(server, key, value)
             server.thresholds = thresholds
-            server.is_active = request.form.get("is_active") == "on"
+            active = request.form.get("is_active") == "on"
+            if server.ssh_public_key and active and not server.installation_completed_at:
+                raise ValueError("Спочатку завершіть перевірку в майстрі підключення.")
+            server.is_active = active
+            if not active:
+                server.installation_status = "DISABLED"
+            elif server.installation_status == "DISABLED":
+                server.installation_status = "ACTIVE" if server.is_authorized else "READY"
             key = request.form.get("private_key", "").strip()
+            if key and server.ssh_public_key:
+                raise ValueError("Ключ цього сервера генерується системою й не замінюється вручну.")
             if key:
                 parse_private_key(key)
                 server.ssh_private_key_encrypted = encrypt(key)
@@ -69,6 +145,9 @@ def edit(server_id):
                     pass
             if group_changed:
                 server.is_authorized = False
+                server.telegram_authorized_at = None
+                if server.is_active:
+                    server.installation_status = "READY"
                 server.authorization_code_hash = None
                 server.authorization_expires_at = None
             audit(current_user.id, "server_updated", "Налаштування оновлено", server.id)
@@ -109,10 +188,16 @@ def detail(server_id):
 @login_required
 def regenerate_code(server_id):
     server = db.get_or_404(Server, server_id)
-    code = issue_code(server)
+    try:
+        code = issue_code(server)
+    except ValueError as error:
+        flash(str(error), "error")
+        return redirect(url_for("servers.setup", server_id=server.id))
     audit(current_user.id, "code_issued", "Код чинний 24 години", server.id)
     db.session.commit()
-    return render_template("authorization_code.html", server=server, code=code)
+    return render_template(
+        "authorization_code.html", server=server, code=code, wizard=bool(server.ssh_public_key)
+    )
 
 
 @bp.get("/api/servers/<int:server_id>")

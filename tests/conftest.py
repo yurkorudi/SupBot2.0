@@ -12,6 +12,7 @@ def app():
     app = create_app(
         {
             "TESTING": True,
+            "PUBLIC_BASE_URL": "https://serverwatch.example",
             "SECRET_KEY": "test-secret-" * 5,
             "ENCRYPTION_KEY": Fernet.generate_key().decode(),
             "SQLALCHEMY_DATABASE_URI": "sqlite://",

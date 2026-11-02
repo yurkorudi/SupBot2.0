@@ -11,6 +11,19 @@ class Server(db.Model):
     ssh_port = db.Column(db.Integer, default=22, nullable=False)
     ssh_username = db.Column(db.String(32), nullable=False)
     ssh_private_key_encrypted = db.Column(db.Text, nullable=False)
+    ssh_public_key = db.Column(db.Text)
+    ssh_key_fingerprint = db.Column(db.String(100))
+    ssh_host_key = db.Column(db.Text)
+    ssh_host_key_fingerprint = db.Column(db.String(100))
+    installation_user = db.Column(db.String(32), default="root", nullable=False)
+    installation_status = db.Column(db.String(32), default="READY", nullable=False, index=True)
+    installation_token_hash = db.Column(db.String(64), unique=True)
+    installation_token_expires_at = db.Column(db.DateTime)
+    installation_token_used_at = db.Column(db.DateTime)
+    installation_completed_at = db.Column(db.DateTime)
+    installation_error = db.Column(db.String(300))
+    telegram_authorized_at = db.Column(db.DateTime)
+    swap_enabled = db.Column(db.Boolean, default=False, nullable=False)
     client_name = db.Column(db.String(100), default="", nullable=False)
     telegram_group_id = db.Column(db.BigInteger)
     authorization_code_hash = db.Column(db.String(64), unique=True)
@@ -48,6 +61,7 @@ class Server(db.Model):
             "status": self.status,
             "key_status": "Ключ збережено",
             "is_authorized": self.is_authorized,
+            "installation_status": self.installation_status,
             "monitoring_interval": self.monitoring_interval,
         }
 

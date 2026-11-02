@@ -188,8 +188,10 @@ def test_add_server_with_mock_ssh(client):
         response = client.post("/servers/add", data=fields)
     assert response.status_code == 200
     server = db.session.scalar(db.select(Server).where(Server.name == "New server"))
-    assert server.authorization_code_hash
-    assert decrypt(server.ssh_private_key_encrypted) == fields["private_key"]
+    assert server.installation_status == "PENDING_SETUP"
+    assert not server.authorization_code_hash
+    assert "BEGIN OPENSSH PRIVATE KEY" in decrypt(server.ssh_private_key_encrypted)
+    assert server.ssh_public_key.startswith("ssh-ed25519 ")
     assert "a-private-key" not in response.get_data(as_text=True)
 
 

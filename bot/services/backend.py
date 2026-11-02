@@ -23,6 +23,19 @@ class Backend:
 
         return await asyncio.to_thread(invoke)
 
+    async def is_bound(self, group_id):
+        def check():
+            return (
+                db.session.scalar(
+                    db.select(Server.id)
+                    .where(Server.telegram_group_id == group_id, Server.is_authorized.is_(True))
+                    .limit(1)
+                )
+                is not None
+            )
+
+        return await self.run(check)
+
     async def bind(self, code, group_id, user_id):
         def bind():
             return authorize_group(code, group_id, user_id).name
@@ -52,7 +65,9 @@ class Backend:
                     server.next_check_at = utcnow()
                     server.next_report_at = utcnow() - timedelta(seconds=1)
                 db.session.commit()
-            return [report(server) for server in servers]
+            texts = [report(server) for server in servers]
+            db.session.commit()
+            return texts
 
         return await self.run(get_reports)
 

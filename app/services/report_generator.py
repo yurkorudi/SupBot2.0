@@ -5,6 +5,8 @@ from app.extensions import db
 from app.models import ServerLog, ServerMetric, utcnow
 
 from .ai_assistant import comment
+from .report_comments import load_level, rotating_comment
+from .report_holidays import holiday_greeting
 
 
 def latest_metric(server_id):
@@ -31,11 +33,45 @@ def escaped_excerpt(value, limit):
     return "".join(parts)
 
 
+def recommendations(server, metric, level):
+    if level == "unknown":
+        return "Відновіть перевірку сервера й отримайте свіжі метрики перед висновками про ресурси."
+    advice = []
+    for resource, value, tip in (
+        ("cpu", metric.cpu_usage, "Перевірте процеси, що навантажують CPU, та чергу виконання."),
+        ("ram", metric.ram_percent, "Перевірте споживання пам’яті процесами. SWAP не замінює RAM."),
+        (
+            "swap",
+            metric.swap_percent,
+            "Перевірте тиск на пам’ять і активність SWAP; не збільшуйте його навмання.",
+        ),
+        (
+            "disk",
+            metric.disk_percent,
+            "Перевірте великі файли та ротацію логів; сплануйте звільнення місця.",
+        ),
+    ):
+        if value > server.thresholds[resource + "_warning"]:
+            advice.append(tip)
+    if any(
+        state not in ("active", "unknown") for state in metric.details.get("services", {}).values()
+    ):
+        advice.append("Перевірте стан і журнал неактивних systemd-сервісів.")
+    return (
+        "\n".join(advice)
+        if advice
+        else "Показники нижче порогів. За цим знімком збільшувати SWAP немає необхідності."
+    )
+
+
 def report(server):
     metric = latest_metric(server.id)
     header = (
         f"📊 <b>ЗВІТ СЕРВЕРА</b>\n{escape(server.name)}\nСтан: {escape(server.status.upper())}\n"
     )
+    greeting = holiday_greeting(server)
+    if greeting:
+        header += "\n" + escaped_excerpt(greeting, 240) + "\n"
     if not metric:
         return header + "\nМетрики ще не зібрано."
     details = metric.details
@@ -59,10 +95,9 @@ def report(server):
         threshold = server.thresholds[kind.lower() + "_warning"]
         text += f"• {kind}: " + ("потрібна увага.\n" if value > threshold else "достатній запас.\n")
     text += "\n<b>РЕКОМЕНДАЦІЇ</b>\n"
-    if metric.ram_percent > server.thresholds["ram_warning"]:
-        text += "Перевірте споживання пам’яті процесами. SWAP не замінює RAM.\n"
-    else:
-        text += "Наразі збільшувати SWAP немає необхідності. Можна випити кави.\n"
+    level = load_level(server, metric)
+    text += recommendations(server, metric, level) + "\n"
+    text += "\n💬 " + escaped_excerpt(rotating_comment(server, level), 240) + "\n"
     ai = comment(metric)
     if ai:
         text += "\nКоментар локального AI: " + escaped_excerpt(ai, 600) + "\n"

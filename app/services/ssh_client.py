@@ -7,6 +7,7 @@ import paramiko
 from flask import current_app
 
 from .encryption import decrypt
+from .ssh_key_manager import parse_host_key
 
 
 class SSHFailure(Exception):
@@ -33,10 +34,15 @@ def parse_private_key(value):
 def connect(server, private_key=None):
     client = paramiko.SSHClient()
     try:
-        known_hosts = current_app.config["SSH_KNOWN_HOSTS"]
-        if not Path(known_hosts).is_file():
-            raise SSHFailure("Відсутній перевірений файл known_hosts.")
-        client.load_host_keys(known_hosts)
+        if server.ssh_host_key:
+            host_key, _ = parse_host_key(server.ssh_host_key)
+            hostname = server.ip_address if server.ssh_port == 22 else f"[{server.ip_address}]:{server.ssh_port}"
+            client.get_host_keys().add(hostname, host_key.get_name(), host_key)
+        else:
+            known_hosts = current_app.config["SSH_KNOWN_HOSTS"]
+            if not Path(known_hosts).is_file():
+                raise SSHFailure("Відсутній перевірений файл known_hosts.")
+            client.load_host_keys(known_hosts)
         client.set_missing_host_key_policy(paramiko.RejectPolicy())
         timeout = current_app.config["SSH_TIMEOUT"]
         key = parse_private_key(private_key or decrypt(server.ssh_private_key_encrypted))
@@ -66,9 +72,12 @@ def connect(server, private_key=None):
         client.close()
 
 
-def execute(client, command, limit=256 * 1024, timeout=None):
+def execute(client, command, limit=256 * 1024, timeout=None, input_data=None):
     timeout = timeout or current_app.config["SSH_TIMEOUT"]
     stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+    if input_data is not None:
+        stdin.write(input_data)
+        stdin.flush()
     stdin.close()
     channel = stdout.channel
     deadline = time.monotonic() + timeout
