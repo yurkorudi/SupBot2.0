@@ -1,0 +1,210 @@
+{% extends "base.html" %}
+{% from 'macros.html' import status, pagination, alert_type %}
+{% block title %}{{ server.name }}{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', filename='vendor/chart.umd.min.js') }}"
+          defer></script>
+  <script src="{{ url_for('static', filename='js/charts.js') }}" defer></script>
+{% endblock %}
+{% block content %}
+  <div class="page-heading">
+    <div>
+      <p class="eyebrow">АНАЛІТИКА СЕРВЕРА</p>
+      <h1>{{ server.name }} {{ status(server.status) }}</h1>
+      <p class="muted">{{ server.ip_address }} · {{ server.client_name or 'Без групи' }} · Ключ збережено</p>
+    </div>
+    <a class="button secondary"
+       href="{{ url_for('servers.edit',server_id=server.id) }}">Налаштувати</a>
+  </div>
+  {% if server.last_error %}
+    <div class="notice error">{{ server.last_error }}</div>
+  {% endif %}
+  <section class="panel">
+    <div class="section-heading">
+      <h2>Використання ресурсів</h2>
+      <select id="chart-period" aria-label="Період статистики">
+        <option value="24h">Останні 24 години</option>
+        <option value="7d">7 днів · погодинно</option>
+        <option value="30d">30 днів · погодинно</option>
+      </select>
+    </div>
+    <div id="metric-charts"
+         class="charts-grid"
+         data-server-id="{{ server.id }}">
+      {% for key,label in [('cpu','CPU'),('ram','RAM'),('swap','SWAP'),('disk','Диск')] %}
+        <div>
+          <h3>
+            {{ label }} <small id="summary-{{ key }}"></small>
+          </h3>
+          <div class="chart-box">
+            <canvas id="chart-{{ key }}">
+            </canvas>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+    <p id="chart-message" class="muted small"></p>
+  </section>
+  {% if metric %}
+    <section class="panel">
+      <h2>Останній знімок · {{ metric.collected_at.strftime("%d.%m.%Y %H:%M") }} UTC</h2>
+      <div class="resource-strip">
+        <div>
+          Ядра CPU <strong>{{ metric.details.cpu_cores }}</strong>
+        </div>
+        <div>
+          Uptime <strong>{{ '%.1f'|format(metric.details.uptime/86400) }} днів</strong>
+        </div>
+        <div>
+          Процеси <strong>{{ metric.details.processes }}</strong>
+        </div>
+        <div>
+          Load Average <strong>{{ metric.details.load_average|join(" / ") }}</strong>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Файлова система</th>
+              <th>Використано</th>
+              <th>Усього</th>
+              <th>%</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for fs in metric.details.filesystems %}
+              <tr>
+                <td>{{ fs.mount }}</td>
+                <td>{{ '%.2f'|format(fs.used/1073741824) }} GB</td>
+                <td>{{ '%.2f'|format(fs.total/1073741824) }} GB</td>
+                <td>{{ fs.percent }}%</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <table>
+          <thead>
+            <tr>
+              <th>Інтерфейс</th>
+              <th>Стан</th>
+              <th>Вхідний трафік, байти</th>
+              <th>Вихідний трафік, байти</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for net in metric.details.interfaces %}
+              <tr>
+                <td>{{ net.name }}</td>
+                <td>{{ net.state }}</td>
+                <td>{{ net['in'] }}</td>
+                <td>{{ net['out'] }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <table>
+          <thead>
+            <tr>
+              <th>Ресурс</th>
+              <th>Використано, GB</th>
+              <th>Усього, GB</th>
+              <th>Вільно, GB</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>RAM</td>
+              <td>{{ '%.2f'|format(metric.ram_used/1073741824) }}</td>
+              <td>{{ '%.2f'|format(metric.ram_total/1073741824) }}</td>
+              <td>{{ '%.2f'|format(metric.details.get('ram_free', 0)/1073741824) }}</td>
+            </tr>
+            <tr>
+              <td>SWAP</td>
+              <td>{{ '%.2f'|format(metric.swap_used/1073741824) }}</td>
+              <td>{{ '%.2f'|format(metric.swap_total/1073741824) }}</td>
+              <td>{{ '%.2f'|format((metric.swap_total-metric.swap_used)/1073741824) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="muted small">Доступна RAM з урахуванням кешу: {{ '%.2f'|format(metric.details.get('ram_available', 0)/1073741824) }} GB.</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Systemd-сервіс</th>
+              <th>Поточний стан</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for name, state in metric.details.get('services', {}).items() %}
+              <tr>
+                <td>{{ name }}</td>
+                <td>{{ {'active':'Активний','inactive':'Неактивний','failed':'Помилка','activating':'Запускається','deactivating':'Зупиняється','unknown':'Невідомий'}.get(state, 'Невідомий') }}</td>
+              </tr>
+            {% else %}
+              <tr>
+                <td colspan="2">Сервіси для перевірки не вибрані.</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {% endif %}
+  <section class="panel">
+    <h2>Авторизація Telegram</h2>
+    <p>{{ 'Групу авторизовано' if server.is_authorized else 'Очікує авторизації' }} · {{ server.telegram_group_id or 'Групу не задано' }}</p>
+    <form method="post"
+          action="{{ url_for('servers.regenerate_code',server_id=server.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="secondary">Створити новий одноразовий код</button>
+    </form>
+  </section>
+  <section class="panel">
+    <h2>Історія аварій</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Час UTC</th>
+            <th>Тип</th>
+            <th>Рівень</th>
+            <th>Стан</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for alert in alerts.items %}
+            <tr>
+              <td>{{ alert.created_at.strftime("%d.%m %H:%M") }}</td>
+              <td>
+                {{ alert_type(alert.alert_type) }}
+                <details>
+                  <summary>Подробиці</summary>
+                  <p>{{ alert.message|striptags }}</p>
+                </details>
+              </td>
+              <td>{{ status(alert.severity) }}</td>
+              <td>{{ status(alert.status) }}</td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="4">Аварій не зареєстровано.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {{ pagination(alerts) }}
+  </section>
+  <section class="panel">
+    <div class="section-heading">
+      <h2>Останні системні події</h2>
+      <a href="{{ url_for('servers.logs', server_id=server.id) }}">Уся історія →</a>
+    </div>
+    {% for log in logs %}
+      <p class="small">{{ log.created_at }} · {{ log.service_name }} — {{ log.message }}</p>
+    {% else %}
+      <p class="muted">Подій не зареєстровано. Доступ до журналу залежить від прав SSH-користувача.</p>
+    {% endfor %}
+  </section>
+{% endblock %}

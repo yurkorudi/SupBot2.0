@@ -1,0 +1,77 @@
+#!/usr/bin/python3 -I
+"""Root-owned fixed operation. No arguments, external commands or user-controlled paths."""
+import fcntl
+import json
+import os
+import stat
+import subprocess
+import sys
+
+PATH = "/var/lib/serverwatch-swap"
+FILE = PATH + "/swap-1g"
+SIZE = 1024 ** 3
+
+
+def result(status, reason):
+    print(json.dumps({"status": status, "reason": reason}))
+
+
+def active():
+    with open("/proc/swaps") as source:
+        return any(line.split()[0] == FILE for line in source.read().splitlines()[1:])
+
+
+def main():
+    if os.geteuid() != 0 or len(sys.argv) != 1:
+        result("denied", "Потрібен root та запуск без аргументів.")
+        return
+    os.umask(0o077)
+    try:
+        os.mkdir(PATH, 0o700)
+    except FileExistsError:
+        pass
+    directory = os.lstat(PATH)
+    if not stat.S_ISDIR(directory.st_mode) or directory.st_uid != 0 or directory.st_mode & 0o022:
+        result("denied", "Небезпечний каталог SWAP.")
+        return
+    lock = os.open(PATH + "/operation.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        result("denied", "Інша операція SWAP уже виконується.")
+        return
+    if active():
+        result("already_active", "Додатковий SWAP уже активний.")
+        return
+    if os.path.lexists(FILE):
+        result("denied", "Файл уже існує. Перезапис заборонено; потрібна ручна перевірка.")
+        return
+    fs = os.statvfs(PATH)
+    if fs.f_bavail * fs.f_frsize < SIZE + 512 * 1024 ** 2:
+        result("denied", "Недостатньо місця: потрібен 1 GB та запас 512 MB.")
+        return
+    fd = os.open(FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    # Writing real blocks works across common Linux filesystems; no sparse swap files.
+    with os.fdopen(fd, "wb") as target:
+        block = bytes(1024 ** 2)
+        for _ in range(1024):
+            target.write(block)
+        target.flush()
+        os.fsync(target.fileno())
+    env = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C"}
+    for command in (["/usr/sbin/mkswap", FILE], ["/usr/sbin/swapon", FILE]):
+        completed = subprocess.run(command, capture_output=True, timeout=45, env=env, check=False)
+        if completed.returncode:
+            result("denied", "ОС відхилила SWAP. Файл збережено для перевірки; повторів немає.")
+            return
+    if not active():
+        result("denied", "ОС не підтвердила активний SWAP.")
+        return
+    result("created", "SWAP +1 GB активний до перезавантаження.")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, subprocess.SubprocessError):
+        result("denied", "Помилка файлової системи або таймаут. Потрібна ручна перевірка.")

@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% from 'macros.html' import pagination %}
+{% block title %}Системні події{% endblock %}
+{% block content %}
+  <div class="page-heading">
+    <div>
+      <p class="eyebrow">ЖУРНАЛ СЕРВЕРА</p>
+      <h1>{{ server.name }} · Системні події</h1>
+      <p class="muted">Помилки та зміни стану сервісів за останні 90 днів.</p>
+    </div>
+    <a href="{{ url_for('servers.detail', server_id=server.id) }}">← До сервера</a>
+  </div>
+  <section class="panel">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Час UTC</th>
+            <th>Сервіс</th>
+            <th>Рівень</th>
+            <th>Подія</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for log in page.items %}
+            <tr>
+              <td>{{ log.created_at }}</td>
+              <td>{{ log.service_name }}</td>
+              <td>{{ {'error':'Помилка','warning':'Попередження','notice':'Подія'}.get(log.log_level, log.log_level) }}</td>
+              <td>{{ log.message }}</td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="4" class="empty">Подій не зареєстровано.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {{ pagination(page) }}
+  </section>
+{% endblock %}

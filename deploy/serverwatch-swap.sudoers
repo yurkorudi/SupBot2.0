@@ -1,0 +1,1 @@
+serverwatch ALL=(root) NOPASSWD: /usr/local/sbin/serverwatch-swap ""

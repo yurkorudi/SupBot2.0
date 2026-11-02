@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% from 'macros.html' import status, pagination %}
+{% block title %}Сервери{% endblock %}
+{% block content %}
+  <div class="page-heading">
+    <div>
+      <p class="eyebrow">ІНФРАСТРУКТУРА</p>
+      <h1>Підключені сервери</h1>
+      <p class="muted">Керуйте доступом та параметрами моніторингу.</p>
+    </div>
+    <a class="button" href="{{ url_for('servers.add') }}">＋ Додати сервер</a>
+  </div>
+  <section class="panel">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Назва</th>
+            <th>Адреса</th>
+            <th>Клієнт</th>
+            <th>Стан</th>
+            <th>Інтервал</th>
+            <th>SSH-ключ</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for server in page.items %}
+            <tr>
+              <td>
+                <a href="{{ url_for('servers.detail',server_id=server.id) }}">{{ server.name }}</a>
+              </td>
+              <td>{{ server.ip_address }}:{{ server.ssh_port }}</td>
+              <td>{{ server.client_name or '—' }}</td>
+              <td>{{ status(server.status) }}{% if not server.is_active %}
+                <small>Моніторинг вимкнено</small>
+          {% endif %}
+        </td>
+        <td>{{ server.monitoring_interval }} с</td>
+        <td>Ключ збережено</td>
+        <td>
+          <a href="{{ url_for('servers.edit',server_id=server.id) }}">Змінити →</a>
+        </td>
+      </tr>
+{% else %}
+  <tr>
+    <td colspan="7" class="empty">Серверів ще немає.</td>
+  </tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+{{ pagination(page) }}
+</section>
+{% endblock %}

@@ -1,0 +1,22 @@
+{% macro status(value) %}
+  <span class="badge {{ value }}">{{ {'online':'Онлайн','offline':'Недоступний','warning':'Увага','pending':'Очікує перевірки','critical':'Критично','open':'Відкрита','resolved':'Вирішена','acknowledged':'У роботі'}.get(value, value) }}</span>
+{% endmacro %}
+{% macro pagination(page) %}
+  <div class="pagination">
+    <span>{{ page.total }} записів · Сторінка {{ page.page }} / {{ page.pages or 1 }}</span>
+    <div class="row">
+      {% if page.has_prev %}
+        <a class="button secondary" href="?page={{ page.prev_num }}">← Назад</a>
+      {% endif %}
+      {% if page.has_next %}
+        <a class="button secondary" href="?page={{ page.next_num }}">Далі →</a>
+      {% endif %}
+    </div>
+  </div>
+{% endmacro %}
+{% macro alert_type(value) %}
+  {{ {'cpu':'CPU', 'ram':'RAM', 'swap':'SWAP', 'disk':'Диск', 'connection':'SSH-з’єднання', 'service':'Системні сервіси'}.get(value, value) }}
+{% endmacro %}
+{% macro action_name(value) %}
+  {{ {'login':'Вхід', 'telegram_denied':'Відмова Telegram', 'authorize_group':'Авторизація групи', 'acknowledge':'Взято в роботу', 'swap_requested':'Запит SWAP', 'swap_result':'Результат SWAP', 'server_added':'Додавання сервера', 'server_updated':'Зміна сервера', 'code_issued':'Випуск коду', 'settings_updated':'Зміна налаштувань'}.get(value, value) }}
+{% endmacro %}

@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% from 'macros.html' import pagination, action_name %}
+{% block title %}Безпека та журнал{% endblock %}
+{% block content %}
+  <div class="page-heading">
+    <div>
+      <p class="eyebrow">КОНТРОЛЬ ДОСТУПУ</p>
+      <h1>Безпека та журнал дій</h1>
+      <p class="muted">Пароль + TOTP · Зашифровані SSH-ключі · Перевірені ключі хостів</p>
+    </div>
+  </div>
+  <section class="panel">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Час UTC</th>
+            <th>Адміністратор</th>
+            <th>Сервер</th>
+            <th>Дія</th>
+            <th>Результат</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for action in page.items %}
+            <tr>
+              <td>{{ action.created_at }}</td>
+              <td>{{ action.admin_id }}</td>
+              <td>{{ action.server_id or '—' }}</td>
+              <td>{{ action_name(action.action) }}</td>
+              <td>{{ action.result }}</td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="5" class="empty">Журнал порожній.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {{ pagination(page) }}
+  </section>
+{% endblock %}

@@ -1,0 +1,23 @@
+[Unit]
+Description=ServerWatch Telegram polling and delivery
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=serverwatch
+Group=serverwatch
+WorkingDirectory=/opt/serverwatch
+EnvironmentFile=/etc/serverwatch/serverwatch.env
+ExecStart=/opt/serverwatch/.venv/bin/python -m bot.main
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/serverwatch/instance
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% from 'macros.html' import status, pagination, alert_type %}
+{% block title %}Сповіщення{% endblock %}
+{% block content %}
+  <div class="page-heading">
+    <div>
+      <p class="eyebrow">ПОДІЇ ІНФРАСТРУКТУРИ</p>
+      <h1>Історія сповіщень</h1>
+    </div>
+  </div>
+  <section class="panel">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Час UTC</th>
+            <th>Сервер</th>
+            <th>Тип</th>
+            <th>Рівень</th>
+            <th>Стан</th>
+            <th>У роботі</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for alert in page.items %}
+            <tr>
+              <td>{{ alert.created_at }}</td>
+              <td>
+                <a href="{{ url_for('servers.detail',server_id=alert.server_id) }}">#{{ alert.server_id }}</a>
+              </td>
+              <td>
+                {{ alert_type(alert.alert_type) }}
+                <details>
+                  <summary>Подробиці</summary>
+                  <p>{{ alert.message|striptags }}</p>
+                </details>
+              </td>
+              <td>{{ status(alert.severity) }}</td>
+              <td>{{ status(alert.status) }}</td>
+              <td>{{ alert.acknowledged_by or '—' }}</td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="6" class="empty">Сповіщень ще немає.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {{ pagination(page) }}
+  </section>
+{% endblock %}

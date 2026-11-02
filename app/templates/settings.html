@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Налаштування{% endblock %}
+{% block content %}
+  <div class="page-heading">
+    <div>
+      <p class="eyebrow">ПАРАМЕТРИ СИСТЕМИ</p>
+      <h1>Налаштування</h1>
+    </div>
+  </div>
+  <div class="dashboard-grid">
+    <section class="panel">
+      <h2>Моніторинг та звіти</h2>
+      <form method="post" class="stack">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label>
+          Повтор аварійного повідомлення, секунди<input name="alert_repeat"
+                                                        type="number"
+                                                        min="300"
+                                                        max="86400"
+                                                        value="{{ repeat }}"
+                                                        required>
+        </label>
+        <label>
+          Автоматичний звіт, секунди<input name="report_interval"
+                                           type="number"
+                                           min="3600"
+                                           max="86400"
+                                           value="{{ interval }}"
+                                           required>
+        </label>
+        <button>Зберегти налаштування</button>
+      </form>
+      <p class="muted small">Інтервали перевірки й пороги задаються на сторінці кожного сервера.</p>
+    </section>
+    <section class="panel">
+      <h2>Telegram</h2>
+      <p>
+        Токен: <strong>{{ 'Налаштовано' if bot_configured else 'Не налаштовано' }}</strong>
+      </p>
+      <p>
+        Головний адміністратор: <strong>{{ admin_id or 'Не задано' }}</strong>
+      </p>
+      <p>
+        Повідомлень у черзі: <strong>{{ queued }}</strong>
+      </p>
+      <p class="muted">Токен та числовий Telegram User ID задаються в .env. Після зміни перезапустіть служби.</p>
+      <h2>Зберігання статистики</h2>
+      <p>
+        Сирі дані: 24 години.
+        <br>
+        Погодинні середні та максимуми: 90 днів.
+        <br>
+        Очищення: щогодини.
+      </p>
+    </section>
+  </div>
+{% endblock %}

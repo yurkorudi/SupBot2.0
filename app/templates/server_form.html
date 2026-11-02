@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Налаштування сервера' if server else 'Новий сервер' }}{% endblock %}
+{% block content %}
+  <div class="page-heading">
+    <div>
+      <p class="eyebrow">SSH-ПІДКЛЮЧЕННЯ</p>
+      <h1>{{ 'Налаштування сервера' if server else 'Додати сервер' }}</h1>
+      <p class="muted">Перед збереженням перевіримо ключ і SSH-з’єднання.</p>
+    </div>
+  </div>
+  <form method="post" class="panel form-panel">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-grid">
+      <label>
+        Назва сервера<input name="name"
+                            value="{{ server.name if server else '' }}"
+                            maxlength="100"
+                            required
+                            placeholder="Production Server 01">
+      </label>
+      <label>
+        Клієнт або група<input name="client_name"
+                               value="{{ server.client_name if server else '' }}"
+                               maxlength="100">
+      </label>
+      <label>
+        Публічна IPv4-адреса<input name="ip_address"
+                                   value="{{ server.ip_address if server else '' }}"
+                                   required
+                                   placeholder="Публічна IP-адреса">
+      </label>
+      <label>
+        SSH-порт<input type="number"
+                       name="ssh_port"
+                       value="{{ server.ssh_port if server else 22 }}"
+                       min="1"
+                       max="65535"
+                       required>
+      </label>
+      <label>
+        SSH-користувач<input name="ssh_username"
+                             value="{{ server.ssh_username if server else 'serverwatch' }}"
+                             required
+                             maxlength="32">
+      </label>
+      <label>
+        Інтервал моніторингу, секунди<input type="number"
+                                            name="monitoring_interval"
+                                            value="{{ server.monitoring_interval if server else 180 }}"
+                                            min="60"
+                                            max="86400"
+                                            required>
+      </label>
+      <label>
+        Telegram Group ID<input name="telegram_group_id"
+                                value="{{ server.telegram_group_id if server and server.telegram_group_id else '' }}"
+                                placeholder="-100…">
+        <small>Необов’язково. Прив’язка підтверджується одноразовим кодом.</small>
+      </label>
+      <label>
+        Systemd-сервіси<input name="services"
+                              value="{{ server.services|join(', ') if server else '' }}"
+                              placeholder="nginx.service, mysql.service">
+      </label>
+    </div>
+    <label>SSH-приватний ключ {{ '— заміна' if server else '' }}<textarea name="private_key" rows="7" autocomplete="off" spellcheck="false" {% if not server %}required{% endif %} placeholder="{{ 'Ключ збережено. Залиште порожнім, щоб зберегти поточний.' if server else '-----BEGIN OPENSSH PRIVATE KEY-----' }}">
+</textarea>
+      <small>Ключ шифрується перед записом. Повторно переглянути його неможливо. Хост має бути в перевіреному known_hosts.</small>
+    </label>
+    {% if server %}
+      <h2>Пороги сповіщень, %</h2>
+      <div class="form-grid">
+        {% for key,label in [('cpu_warning','CPU — попередження'),('ram_warning','RAM — попередження'),('ram_critical','RAM — критично'),('disk_warning','Диск — попередження'),('disk_critical','Диск — критично'),('swap_warning','SWAP — попередження')] %}
+          <label>
+            {{ label }}<input name="{{ key }}"
+                              type="number"
+                              value="{{ server.thresholds[key] }}"
+                              min="1"
+                              max="100"
+                              required>
+          </label>
+        {% endfor %}
+      </div>
+      <label class="check">
+      <input type="checkbox"
+             name="is_active"
+             {% if server.is_active %}checked{% endif %}>Моніторинг увімкнено</label>
+    {% endif %}
+    <div class="form-actions">
+      <button>Перевірити SSH та зберегти</button>
+      <a href="{{ url_for('servers.index') }}">Скасувати</a>
+    </div>
+  </form>
+{% endblock %}

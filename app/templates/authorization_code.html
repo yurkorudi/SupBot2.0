@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Авторизація Telegram{% endblock %}
+{% block content %}
+  <section class="panel auth-card">
+    <span class="eyebrow">СЕРВЕР ЗБЕРЕЖЕНО</span>
+    <h1>Підключіть Telegram</h1>
+    <p>Сервер: {{ server.name }}</p>
+    <p class="muted">Код показується лише зараз. Чинний 24 години та спрацює один раз.</p>
+    <code id="authorization-code">{{ code }}</code>
+    <button type="button" id="copy-code">Скопіювати код</button>
+    <p>Додайте бота до групи й надішліть <code>/bind КОД</code> від облікового запису головного адміністратора.</p>
+    <a class="button secondary"
+       href="{{ url_for('servers.detail',server_id=server.id) }}">Перейти до сервера →</a>
+  </section>
+{% endblock %}

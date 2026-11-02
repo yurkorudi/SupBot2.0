@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="uk" data-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <title>{% block title %}ServerWatch{% endblock %} · Моніторинг серверів</title>
+    <link rel="stylesheet"
+          href="{{ url_for('static', filename='css/app.css') }}">
+    <script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
+    {% block scripts %}{% endblock %}
+  </head>
+  <body>
+    {% if current_user.is_authenticated %}
+      <aside class="sidebar">
+        <a class="brand" href="{{ url_for('dashboard.index') }}">
+          <span class="brand-icon">▥</span> ServerWatch</a>
+        <span class="eyebrow">ЦЕНТР КЕРУВАННЯ</span>
+        <nav aria-label="Головне меню">
+          <a href="{{ url_for('dashboard.index') }}"
+             {% if request.path == '/' %}aria-current="page"{% endif %}>◫ <span>Огляд системи</span>
+          </a>
+          <a href="{{ url_for('servers.index') }}"
+             {% if request.path.startswith('/servers') %}aria-current="page"{% endif %}>▤ <span>Сервери</span>
+          </a>
+          <a href="{{ url_for('dashboard.alerts') }}"
+             {% if request.path == '/alerts' %}aria-current="page"{% endif %}>♧ <span>Сповіщення</span>
+          </a>
+          <a href="{{ url_for('settings.index') }}"
+             {% if request.path == '/settings' %}aria-current="page"{% endif %}>⚙ <span>Налаштування</span>
+          </a>
+          <a href="{{ url_for('settings.security') }}"
+             {% if request.path == '/security' %}aria-current="page"{% endif %}>◇ <span>Безпека та журнал</span>
+          </a>
+        </nav>
+        <div class="sidebar-bottom">
+          <span class="status-dot"></span> Централізований моніторинг
+          <br>
+          <small>SSH · MySQL · Telegram</small>
+        </div>
+      </aside>
+    {% endif %}
+    <div class="shell {% if not current_user.is_authenticated %}guest{% endif %}">
+      <header class="topbar">
+        <span>Інфраструктура / {% block breadcrumb %}Панель керування{% endblock %}</span>
+        <div class="row">
+          <button type="button"
+                  class="quiet"
+                  id="theme-toggle"
+                  aria-label="Перемкнути тему">◐ Тема</button>
+          {% if current_user.is_authenticated %}
+            <span>{{ current_user.username }}</span>
+            <form method="post" action="{{ url_for('auth.logout') }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="quiet">Вийти</button>
+            </form>
+          {% endif %}
+        </div>
+      </header>
+      <main>
+        {% for category, message in get_flashed_messages(with_categories=true) %}
+          <div class="notice {{ category }}" role="status">{{ message }}</div>
+        {% endfor %}
+        {% block content %}{% endblock %}
+      </main>
+      <footer>
+        ServerWatch <span>Час журналів: UTC · Захищений доступ</span>
+      </footer>
+    </div>
+  </body>
+</html>

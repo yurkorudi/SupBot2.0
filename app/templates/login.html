@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Вхід{% endblock %}
+{% block content %}
+  <section class="auth-card panel">
+    <div class="brand-icon large">▥</div>
+    <p class="eyebrow">SERVERWATCH</p>
+    <h1>
+      Ваша інфраструктура
+      <br>
+      під контролем.
+    </h1>
+    <p class="muted">Увійдіть до захищеної панелі моніторингу.</p>
+    <form method="post" class="stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>
+        Логін<input name="username"
+                    maxlength="80"
+                    required
+                    autocomplete="username"
+                    autofocus>
+      </label>
+      <label>
+        Пароль<input name="password"
+                     type="password"
+                     required
+                     autocomplete="current-password">
+      </label>
+      <button>Продовжити →</button>
+    </form>
+    <p class="small muted">Наступний крок — код із застосунку автентифікації.</p>
+  </section>
+{% endblock %}
