@@ -87,8 +87,28 @@ README тепер містить мінімальну вимогу 3.10+ і си
 
 ## Що не виконувалося
 
+Додано окремий режим прямого HTTPS на IP: docs/ip-https.md,
+deploy/nginx-ip-bootstrap.conf, deploy/nginx-ip-https.conf та
+deploy/serverwatch-certbot.service/.timer. Bootstrap не проксіює панель через HTTP;
+TLS використовує фіксований lineage serverwatch-ip, Certbot 5.4+ у власному venv
+та поновлення кожні 6 годин із reload Nginx. README/SECURITY містять посилання
+й межі режиму. Після цієї зміни 53 тести пройшли на Python 3.10.22; 63 Bash-блоки
+README та IP-інструкції пройшли статичний розбір. Реальна видача IP-сертифіката
+та робота Nginx/Certbot на VPS не виконувалися.
+
 Встановлення на чистому Ubuntu, запуск справжніх MySQL/Nginx/systemd/UFW/Fail2ban,
 випуск сертифіката, reboot VPS, Telegram polling та реальні SSH/SWAP/backup дії
 не виконувалися. Робоче середовище аудиту — Windows; WSL не встановлений.
 Статичні перевірки команд не є виконанням цих команд у Linux. Перед production
 потрібен прохід README на staging/VPS і checklist із розділу 13.
+
+
+## Виправлення Gunicorn control socket
+
+За журналом VPS Gunicorn 25.3.0 намагався створити control socket у
+/opt/serverwatch/.gunicorn, що суперечить ProtectSystem=strict. Вебsocket при
+цьому повертав HTTP 200. Unit та його копію в README доповнено
+--no-control-socket; мінімум Gunicorn у requirements піднято до 25.3 для
+сумісності цього прапорця. Файловий захист не послаблювався. Додано
+регресійний тест параметрів unit. Попередження RestartMode у snapd.service
+не належить до unit-файлів ServerWatch. Реальний рестарт на VPS тут не виконувався.

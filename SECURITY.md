@@ -20,6 +20,14 @@ Nginx **перезаписує** X-Forwarded-For і X-Forwarded-Proto. Не ви
 трафік до VPS шифрується SSH. Не відкривайте 8080 назовні. Для публічного HTTPS
 обов’язково true. Nginx обмежує POST входу через map/limit_req у http context.
 
+Альтернатива без домену — прямий HTTPS на IP (docs/ip-https.md). Початковий
+nginx-ip-bootstrap.conf відкриває тільки ACME-challenge, не форму входу. Після
+видачі сертифіката nginx-ip-https.conf проксіює панель лише через TLS; потрібен
+SESSION_COOKIE_SECURE=true. IP-сертифікат shortlived потребує поновлення:
+serverwatch-certbot.timer використовує окремий Certbot 5.4+ та reload Nginx.
+Публічно відкриваються лише 80/443 і раніше дозволений SSH; Gunicorn та MySQL
+залишаються непублічними. Приватний TLS-ключ читає root/Nginx, не API застосунку.
+
 ## Ключі та коди
 
 SSH-ключі й TOTP-секрети шифруються Fernet до запису в MySQL. ENCRYPTION_KEY

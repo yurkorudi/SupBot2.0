@@ -8,6 +8,10 @@ SSH-моніторинг Linux, українська Flask-панель із п�
 із власним доменом описаний окремою гілкою. Паролі, TOTP та приватні SSH-ключі
 не можна передавати через публічний незашифрований HTTP.
 
+Для прямого доступу **за публічною IP без тунелю й без домену** використовуйте
+[окремий сценарій HTTPS на IP](docs/ip-https.md). Він замінює гілки Nginx у
+розділі 10 після запуску служб і firewall; для нього ACCESS_MODE=https.
+
 Інструкція призначена для **чистого Ubuntu Server 22.04/24.04 LTS, Python 3.10+ та MySQL 8**.
 **На чистому Ubuntu VPS ця процедура під час аудиту не виконувалася.** Локальні
 тести та перевірка конфігурацій не замінюють перевірку встановлення на сервері.
@@ -330,6 +334,10 @@ sudo -u serverwatch /opt/serverwatch/.venv/bin/python /opt/serverwatch/scripts/m
 
 ## 8. Systemd: три окремі процеси
 
+Gunicorn 25.3+ запускається з --no-control-socket: керування виконує systemd.
+Це запобігає створенню .gunicorn у read-only каталозі проєкту;
+ProtectSystem=strict залишається ввімкненим.
+
 Нижче — повний вміст фактичних unit-файлів. EnvironmentFile читає systemd до
 запуску процесу. Web має групу www-data для socket та додаткову serverwatch для
 known_hosts; /run/serverwatch створюється автоматично. instance створено раніше.
@@ -350,7 +358,7 @@ Group=www-data
 SupplementaryGroups=serverwatch
 WorkingDirectory=/opt/serverwatch
 EnvironmentFile=/etc/serverwatch/serverwatch.env
-ExecStart=/opt/serverwatch/.venv/bin/gunicorn --workers 1 --threads 2 --bind unix:/run/serverwatch/web.sock --umask 7 --timeout 120 --access-logfile - --error-logfile - run:app
+ExecStart=/opt/serverwatch/.venv/bin/gunicorn --workers 1 --threads 2 --bind unix:/run/serverwatch/web.sock --no-control-socket --umask 7 --timeout 120 --access-logfile - --error-logfile - run:app
 RuntimeDirectory=serverwatch
 RuntimeDirectoryMode=0750
 Restart=on-failure
@@ -620,7 +628,8 @@ sudo certbot renew --dry-run
 Очікується HTTPS 200 без помилок довіри. Відкрийте `https://ВАШ_ДОМЕН/login`.
 Не ігноруйте попередження сертифіката. Renew описаний у
 [Certbot documentation](https://eff-certbot.readthedocs.io/en/stable/using.html).
-Без домену пропустіть цю гілку; IP-сертифікати тут не налаштовуються.
+Без домену пропустіть цю гілку. Прямий HTTPS на IP налаштовується за
+[docs/ip-https.md](docs/ip-https.md), з новим Certbot та окремим timer поновлення.
 
 ## 11. Перший вхід і клієнтські сервери
 

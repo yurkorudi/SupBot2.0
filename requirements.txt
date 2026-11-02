@@ -10,4 +10,4 @@ pyotp>=2.9,<3
 qrcode>=8,<9
 aiogram>=3.22,<4
 python-dotenv>=1.1,<2
-gunicorn>=23,<26; sys_platform != 'win32'
+gunicorn>=25.3,<26; sys_platform != 'win32'

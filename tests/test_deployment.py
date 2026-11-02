@@ -124,6 +124,7 @@ def test_backup_fails_closed_and_only_publishes_after_validation():
 
 def test_all_readme_bash_blocks_parse():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    readme += (ROOT / "docs/ip-https.md").read_text(encoding="utf-8")
     blocks = re.findall(r"```bash\n(.*?)\n```", readme, re.S)
     assert len(blocks) > 30
     for number, content in enumerate(blocks, 1):
@@ -157,3 +158,35 @@ def test_upgrade_drops_root_before_running_flask(monkeypatch):
     monkeypatch.setattr(manage.subprocess, "call", run)
     assert manage.main() == 0
     assert order == ["drop", "flask"]
+
+
+def test_ip_bootstrap_never_exposes_login_over_plain_http():
+    config = (ROOT / "deploy/nginx-ip-bootstrap.conf").read_text()
+    assert "location ^~ /.well-known/acme-challenge/" in config
+    assert "return 404;" in config
+    assert "proxy_pass" not in config and "serverwatch-proxy.conf" not in config
+
+
+def test_ip_tls_paths_match_certificate_name_and_renewal_hook():
+    config = (ROOT / "deploy/nginx-ip-https.conf").read_text()
+    assert "listen 443 ssl;" in config
+    assert "/etc/letsencrypt/live/serverwatch-ip/fullchain.pem" in config
+    assert "/etc/letsencrypt/live/serverwatch-ip/privkey.pem" in config
+    assert "return 301 https://$server_name$request_uri;" in config
+    assert "serverwatch-proxy.conf" in config
+    unit = (ROOT / "deploy/serverwatch-certbot.service").read_text()
+    assert "--cert-name serverwatch-ip" in unit
+    assert "--deploy-hook" in unit and "nginx -t" in unit and "reload nginx" in unit
+    assert "/opt/serverwatch-certbot/bin/certbot renew" in unit
+    timer = (ROOT / "deploy/serverwatch-certbot.timer").read_text()
+    assert "00,06,12,18:15:00 UTC" in timer and "Persistent=true" in timer
+
+
+def test_gunicorn_control_socket_is_disabled_without_weakening_filesystem():
+    unit = (ROOT / "deploy/serverwatch-web.service").read_text()
+    assert "--no-control-socket" in unit
+    assert "ProtectSystem=strict" in unit
+    assert "ReadWritePaths=/opt/serverwatch/instance" in unit
+    assert "ReadWritePaths=/opt/serverwatch\n" not in unit
+    requirements = (ROOT / "requirements.txt").read_text()
+    assert "gunicorn>=25.3,<26" in requirements

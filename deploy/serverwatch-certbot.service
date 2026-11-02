@@ -1,0 +1,10 @@
+[Unit]
+Description=Renew ServerWatch IP certificate and reload Nginx
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/opt/serverwatch-certbot/bin/certbot renew --quiet --cert-name serverwatch-ip --deploy-hook "/usr/sbin/nginx -t && /usr/bin/systemctl reload nginx"
+UMask=0077
