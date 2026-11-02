@@ -6,3 +6,4 @@
 *.conf text eol=lf
 *.sudoers text eol=lf
 scripts/serverwatch-swap text eol=lf
+scripts/serverwatch-backup text eol=lf

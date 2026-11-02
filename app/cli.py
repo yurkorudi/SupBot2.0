@@ -28,7 +28,9 @@ def register_commands(app):
             raise click.ClickException(str(error)) from None
         db.session.add(user)
         db.session.commit()
-        click.echo("Адміністратора створено. Увійдіть через HTTPS та налаштуйте TOTP.")
+        click.echo(
+            "Адміністратора створено. Відкрийте панель через SSH-тунель або HTTPS та налаштуйте TOTP."
+        )
 
     @app.cli.command("reset-totp")
     @click.argument("username")

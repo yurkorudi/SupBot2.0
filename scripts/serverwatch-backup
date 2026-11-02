@@ -1,0 +1,17 @@
+#!/bin/bash
+set -euo pipefail
+umask 077
+
+directory=/var/backups/serverwatch
+exec 9>"$directory/backup.lock"
+/usr/bin/flock --nonblock 9
+temporary=$(/usr/bin/mktemp "$directory/.database.XXXXXX")
+trap '/usr/bin/rm -f -- "$temporary"' EXIT
+
+/usr/bin/mysqldump --no-defaults --protocol=SOCKET --user=root \
+    --single-transaction --no-tablespaces --skip-lock-tables serverwatch \
+    | /usr/bin/gzip > "$temporary"
+/usr/bin/gzip --test "$temporary"
+destination="$directory/serverwatch-$(/usr/bin/date -u +%Y%m%dT%H%M%SZ).sql.gz"
+/usr/bin/mv -- "$temporary" "$destination"
+echo "Backup created: $destination"

@@ -1,0 +1,13 @@
+[Unit]
+Description=ServerWatch MySQL backup
+After=mysql.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/sbin/serverwatch-backup
+UMask=0077
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/backups/serverwatch
