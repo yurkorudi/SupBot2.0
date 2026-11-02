@@ -8,7 +8,7 @@ SSH-моніторинг Linux, українська Flask-панель із п�
 із власним доменом описаний окремою гілкою. Паролі, TOTP та приватні SSH-ключі
 не можна передавати через публічний незашифрований HTTP.
 
-Інструкція призначена для **чистого Ubuntu Server 24.04 LTS, Python 3.12+ та MySQL 8**.
+Інструкція призначена для **чистого Ubuntu Server 22.04/24.04 LTS, Python 3.10+ та MySQL 8**.
 **На чистому Ubuntu VPS ця процедура під час аудиту не виконувалася.** Локальні
 тести та перевірка конфігурацій не замінюють перевірку встановлення на сервері.
 
@@ -34,11 +34,12 @@ Production-залежності — `requirements.txt`, тести — `requirem
 Gunicorn встановлюється тільки на Linux; Chart.js включений локально з ліцензією.
 
 У [Ubuntu 24.04](https://packages.ubuntu.com/noble/python3) системний Python 3.12,
-у [Ubuntu 22.04](https://packages.ubuntu.com/jammy/python3) — 3.10. Репозиторій
-використовує можливості Python 3.11+ та орієнтований на 3.12+, тому стандартна
-22.04 **не підтримується цим сценарієм**. Для нового VPS виберіть 24.04. На 22.04
-потрібен окремо встановлений і перевірений Python 3.12+; не виконуйте venv системним
-3.10, не замінюйте `/usr/bin/python3` або його alternatives.
+у [Ubuntu 22.04](https://packages.ubuntu.com/jammy/python3) — 3.10. Код сумісний з
+Python 3.10+: для UTC використовується `datetime.timezone.utc`, а не доданий у 3.11
+аліас `datetime.UTC`. Ruff налаштовано на py310, щоб автоматичні виправлення не
+повертали цей несумісний імпорт. Змінювати системний Python або перевстановлювати
+VPS для усунення цієї помилки не потрібно. Повне розгортання на обох версіях
+Ubuntu слід перевірити на своєму VPS; локальні Python-тести не замінюють Linux-перевірку.
 
 ## 2. Перед початком
 
@@ -57,7 +58,7 @@ df -h /
 id
 sudo -v
 python3 --version
-python3 -c 'import sys; assert sys.version_info >= (3,12), "Потрібен Python 3.12+; для чистого VPS виберіть Ubuntu 24.04"'
+python3 -c 'import sys; assert sys.version_info >= (3,10), "Потрібен Python 3.10+"'
 ```
 
 Задайте **свої параметри** замість прикладів. `SSH_PORT` — чинний порт SSH
@@ -141,7 +142,7 @@ ls -l run.py requirements.txt .env.example app/config.py migrations/env.py
 ls -l bot/main.py monitoring/worker.py deploy/serverwatch-web.service
 ```
 
-Створіть venv Python 3.12 і встановіть залежності саме в нього. Системний
+Створіть venv системним Python 3.10+ і встановіть залежності саме в нього. Системний
 `sudo pip` не потрібен; усі процеси використовують `/opt/serverwatch/.venv`.
 
 ```bash

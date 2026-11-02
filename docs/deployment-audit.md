@@ -10,7 +10,7 @@ app/cli.py, run.py, bot/main.py, monitoring/worker.py, deploy та README.
 |---|---|
 | Домен був обов’язковим у документації | Основний сценарій без домену: loopback Nginx та SSH-тунель; HTTPS окремо |
 | Secure cookie заважав би HTTP-тунелю | Генератор задає false тільки для tunnel, true для HTTPS; описані межі |
-| Неперевірена сумісність системного Python | Чітка вимога 3.12+, Ubuntu 24.04; штатна 22.04/3.10 не заявляється підтримуваною |
+| Несумісний імпорт datetime.UTC на Python 3.10 | Три імпорти замінено на timezone.utc, Ruff target py310; README охоплює системний Python Ubuntu 22.04/24.04 |
 | Секрети друкувалися в термінал і вручну переносилися | Генератор записує секрети й SQL у приватні файли без виведення |
 | Shell source environment мав ризик помилок екранування | Manage-helper читає dotenv і запускає справжні Flask-команди без shell |
 | MySQL-встановлення без явної послідовності перевірок | Install, validate-config, enable, loopback, root socket, створення БД/ролей, grants, Python SELECT 1 |
@@ -67,10 +67,23 @@ README містить повний вміст трьох unit-файлів. Те
   delimiters нормалізуються через відоме обмеження bashlex 0.18. Це не bash -n
   і не виконання команд у Linux.
 
-Підсумковий локальний прогін: **49 passed**, із них 10 deployment-тестів.
+Початковий локальний прогін: **49 passed**, із них 10 deployment-тестів.
 Перевірено 53 Bash-блоки README та backup-скрипт. Ruff check/format, djlint і
 pip check завершилися успішно. Міграцію окремо скомпільовано в MySQL SQL без
 відкриття з’єднання з MySQL. Застосування й відкат міграції виконано лише на SQLite.
+
+## Виправлення для Python 3.10
+
+На VPS підтверджено Python 3.10.12 і ImportError для datetime.UTC. Імпорт
+замінено на timezone.utc в app/models/__init__.py, monitoring/collectors.py
+та monitoring/worker.py. Ruff target у pyproject.toml змінено на py310;
+README тепер містить мінімальну вимогу 3.10+ і системні версії обох Ubuntu.
+Додано tests/test_python_compatibility.py: синтаксис Python 3.10 та імпорт
+моделей/моніторингу без datetime.UTC. БД, секрети та схема не змінювалися.
+
+Після виправлення **51 тест пройшов на справжньому Python 3.10.22 та на Python
+3.14.6** в окремих локальних Windows-середовищах. Це підтверджує Python-сумісність,
+але не є перевіркою розгортання Linux або точної patch-версії 3.10.12 на VPS.
 
 ## Що не виконувалося
 

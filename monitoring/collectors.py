@@ -1,7 +1,7 @@
 import json
 import math
 import shlex
-from datetime import UTC, timedelta
+from datetime import timedelta, timezone
 from pathlib import Path
 
 from app.models import utcnow
@@ -12,7 +12,7 @@ SOURCE = Path(__file__).with_name("remote_collect.py").read_text(encoding="utf-8
 
 def collect_server(server):
     since = server.last_success_at or (utcnow() - timedelta(hours=4))
-    stamp = int(since.replace(tzinfo=UTC).timestamp())
+    stamp = int(since.replace(tzinfo=timezone.utc).timestamp())
     command = (
         "python3 - "
         + shlex.quote(json.dumps(server.services))

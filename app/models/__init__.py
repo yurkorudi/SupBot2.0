@@ -1,8 +1,8 @@
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 
 def utcnow():
-    return datetime.now(UTC).replace(tzinfo=None)
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 from .alerts import AdminAction, Alert, Outbox  # noqa: E402, F401

@@ -3,7 +3,7 @@ import signal
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import or_, update
 
@@ -43,7 +43,7 @@ def monitor_one(server_id):
         db.session.add(metric)
         db.session.flush()
         for event in data["details"].get("errors", [])[:30]:
-            stamp = datetime.fromtimestamp(event["timestamp"], UTC).replace(tzinfo=None)
+            stamp = datetime.fromtimestamp(event["timestamp"], timezone.utc).replace(tzinfo=None)
             exists = db.session.scalar(
                 db.select(ServerLog.id)
                 .where(
