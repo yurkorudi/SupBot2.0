@@ -17,6 +17,11 @@ def parse_private_key(value):
     for kind in (paramiko.Ed25519Key, paramiko.ECDSAKey, paramiko.RSAKey):
         try:
             return kind.from_private_key(io.StringIO(value))
+        except paramiko.PasswordRequiredException:
+            raise ValueError(
+                "Ключ захищений парольною фразою. Для фонового моніторингу потрібен "
+                "окремий ключ без парольної фрази; перед записом у БД він шифрується."
+            ) from None
         except (paramiko.SSHException, ValueError):
             continue
     raise ValueError(

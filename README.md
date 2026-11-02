@@ -657,6 +657,21 @@ ssh-keygen -t ed25519 -f ./client01-serverwatch -N '' -C serverwatch-client01
 cat ./client01-serverwatch.pub
 ```
 
+Цей блок призначений для **Bash**, не Windows CMD. На Windows CMD замість нього
+виконайте наступні команди. На запит нової парольної фрази натисніть Enter двічі:
+цей окремий ключ потрібен для неінтерактивного моніторингу. Якщо файл уже існує,
+не перезаписуйте його. `-N ''` у CMD не використовуйте: це задає фразу з двох лапок.
+
+```cmd
+ssh-keygen -t ed25519 -f "%USERPROFILE%\client01-serverwatch" -C serverwatch-client01
+type "%USERPROFILE%\client01-serverwatch.pub"
+```
+
+Якщо ключ уже створений у CMD командою з `-N ''`, збережіть ту саму пару ключів:
+виконайте `ssh-keygen -p -f "%USERPROFILE%\client01-serverwatch"`, введіть дві
+одинарні лапки як стару фразу й залиште нову порожньою (Enter двічі). Публічний
+ключ не зміниться, повторно додавати його в authorized_keys не потрібно.
+
 У клієнтський authorized_keys вставте тільки .pub із префіксом restrict; за
 сталої адреси центрального VPS — `from="CENTRAL_PUBLIC_IP",restrict`.
 Клієнтському SSH-користувачу потрібен shell для фіксованого збирача, без загального

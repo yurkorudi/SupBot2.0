@@ -27,6 +27,46 @@ def cpu_ticks():
     return sum(values), values[3] + values[4]
 
 
+def parse_service_event(line, services):
+    try:
+        event = json.loads(line)
+        if not isinstance(event, dict):
+            return None
+        unit = next(
+            (
+                value
+                for value in (event.get("UNIT"), event.get("_SYSTEMD_UNIT"))
+                if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.@-]{1,90}\.service", value)
+            ),
+            None,
+        )
+        if not unit:
+            return None
+        priority = int(event.get("PRIORITY", 6))
+        message = str(event.get("MESSAGE", ""))
+        failed = bool(re.search(r"\bfailed\b", message, re.IGNORECASE))
+        if priority <= 3 or failed:
+            level, classification = "error", "Помилка системного сервісу"
+        elif priority == 4:
+            level, classification = "warning", "Попередження системного сервісу"
+        elif unit not in services:
+            return None
+        elif re.search(r"\brestart", message, re.IGNORECASE):
+            level, classification = "notice", "Перезапуск сервісу"
+        elif re.search(r"\b(?:Started|Stopped)\b", message):
+            level, classification = "notice", "Зміна стану сервісу"
+        else:
+            return None
+        return {
+            "service": unit,
+            "level": level,
+            "message": classification,
+            "timestamp": int(event["__REALTIME_TIMESTAMP"]) // 1000000,
+        }
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
 def collect(services, since):
     before, idle_before = cpu_ticks()
     time.sleep(0.25)
@@ -84,20 +124,9 @@ def collect(services, since):
         ["journalctl", "--since", f"@{since}", "-p", "0..4", "-n", "30", "-o", "json", "--no-pager"]
     ).splitlines()
     for line in lines:
-        try:
-            event = json.loads(line)
-            unit = event.get("_SYSTEMD_UNIT", "")
-            if re.fullmatch(r"[A-Za-z0-9_.@-]{1,90}\.service", unit):
-                events.append(
-                    {
-                        "service": unit,
-                        "level": "warning",
-                        "message": "Системна помилка",
-                        "timestamp": int(event["__REALTIME_TIMESTAMP"]) // 1000000,
-                    }
-                )
-        except (ValueError, KeyError, TypeError):
-            continue
+        event = parse_service_event(line, services)
+        if event:
+            events.append(event)
     for name, state in states.items():
         if state == "failed":
             events.append(
@@ -112,26 +141,9 @@ def collect(services, since):
         ["journalctl", "--since", f"@{since}", "_PID=1", "-n", "60", "-o", "json", "--no-pager"]
     ).splitlines()
     for line in lifecycle:
-        try:
-            event = json.loads(line)
-            unit = event.get("UNIT", "")
-            message = event.get("MESSAGE", "")
-            if not re.fullmatch(r"[A-Za-z0-9_.@-]{1,90}\.service", unit):
-                continue
-            if re.search(r"restart|Started |Stopped |Failed ", message):
-                classification = (
-                    "Перезапуск сервісу" if "restart" in message else "Зміна стану сервісу"
-                )
-                events.append(
-                    {
-                        "service": unit,
-                        "level": "notice",
-                        "message": classification,
-                        "timestamp": int(event["__REALTIME_TIMESTAMP"]) // 1000000,
-                    }
-                )
-        except (ValueError, KeyError, TypeError):
-            continue
+        event = parse_service_event(line, services)
+        if event:
+            events.append(event)
     load = os.getloadavg()
     return {
         "cpu_usage": round(max(0, min(100, cpu)), 2),

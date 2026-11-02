@@ -69,7 +69,9 @@ def report(server):
     errors = db.session.scalars(
         db.select(ServerLog)
         .where(
-            ServerLog.server_id == server.id, ServerLog.created_at >= utcnow() - timedelta(hours=4)
+            ServerLog.server_id == server.id,
+            ServerLog.created_at >= utcnow() - timedelta(hours=4),
+            ServerLog.log_level.in_(["warning", "error", "critical"]),
         )
         .order_by(ServerLog.created_at.desc())
         .limit(12)
