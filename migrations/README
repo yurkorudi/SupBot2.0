@@ -1,1 +1,70 @@
-Single-database configuration for Flask.
+# Database migrations
+
+ServerWatch uses Flask-Migrate and Alembic to manage a single SQLAlchemy database.
+Committed revisions are the source of truth for schema changes. Production uses
+MySQL 8; automated migration tests also exercise SQLite.
+
+## Revision history
+
+| Revision | Parent | Scope |
+|---|---|---|
+| c99481d201d8 | None | Initial ServerWatch schema |
+| 4e2c9d8f610a | c99481d201d8 | Guided server setup, SSH key metadata, host-key pinning, and installation lifecycle fields |
+
+The setup-wizard migration preserves existing SSH credentials, Telegram group
+bindings, and monitoring history. Existing clients do not need to be reinstalled.
+
+## Apply committed revisions
+
+On the deployed central VPS, back up the database and original encryption key,
+stop application services, and run:
+
+    sudo /opt/serverwatch/.venv/bin/python /opt/serverwatch/scripts/manage.py upgrade
+    sudo -u serverwatch /opt/serverwatch/.venv/bin/python /opt/serverwatch/scripts/manage.py status
+
+The upgrade helper reads /etc/serverwatch/serverwatch.env and the root-only
+/etc/serverwatch/migration.env. It then drops operating-system privileges to
+serverwatch before running Flask CLI with the migration database account.
+Runtime services use a separate account without schema-change privileges.
+
+For the complete stop, backup, upgrade, and restart sequence, see sections 7 and
+16 of the root README.md. Do not regenerate the environment or ENCRYPTION_KEY
+when upgrading an existing installation.
+
+## Create a revision during development
+
+Use a separate development database and an environment with DDL privileges:
+
+    python -m flask --app run db current
+    python -m flask --app run db migrate -m "Describe the schema change"
+    python -m flask --app run db upgrade
+    python -m flask --app run db heads
+
+Review generated upgrade() and downgrade() operations, especially data changes,
+constraints, indexes, and MySQL-specific behavior. Autogeneration is a starting
+point and may require manual edits. Commit the reviewed revision together with
+its model changes and relevant documentation.
+
+Run the migration tests against a disposable database:
+
+    python -m pytest tests/test_migrations.py -q
+
+SQLite tests do not establish production MySQL compatibility. Validate material
+schema changes against the target MySQL version before deployment.
+
+## Operational constraints
+
+- Do not run db init or db migrate on production; apply the committed revisions.
+- Do not use db.create_all() or stamp head to bypass a failed migration.
+- MySQL DDL may leave partial changes after an error. Inspect both the actual
+  schema and alembic_version before planning recovery.
+- Do not run migrations concurrently with the backup job or application writes.
+- A downgrade may remove data. Review its implementation and verify a restorable
+  backup before using it; a downgrade is not a substitute for disaster recovery.
+
+## Directory layout
+
+    env.py          Flask application/database integration and Alembic context
+    alembic.ini     Migration logging and Alembic configuration
+    script.py.mako  Template used when creating new revisions
+    versions/       Ordered, committed schema revisions

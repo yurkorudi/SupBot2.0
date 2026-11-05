@@ -1,80 +1,180 @@
-# ServerWatch — розгортання на чистому Ubuntu VPS
+# ServerWatch
 
-SSH-моніторинг Linux, українська Flask-панель із паролем/TOTP, MySQL та Telegram
-на aiogram 3. Docker, Redis і Node.js не потрібні.
+**Linux server monitoring, actionable Telegram alerts, and a central web dashboard.**
 
-**Основний сценарій — без домену, через SSH-тунель.** Nginx слухає лише
-`127.0.0.1:8080` на VPS. З’єднання з комп’ютером шифрується SSH. Публічний HTTPS
-із власним доменом описаний окремою гілкою. Паролі, TOTP та приватні SSH-ключі
-не можна передавати через публічний незашифрований HTTP.
+ServerWatch is a self-hosted monitoring application for administrators managing
+Linux VPS infrastructure. It collects resource and service health over SSH,
+stores metrics in MySQL, and delivers reports and incident notifications to
+Telegram groups. A Flask dashboard brings server onboarding, historical charts,
+alert thresholds, and administration into one place.
 
-Для прямого доступу **за публічною IP без тунелю й без домену** використовуйте
-[окремий сценарій HTTPS на IP](docs/ip-https.md). Він замінює гілки Nginx у
-розділі 10 після запуску служб і firewall; для нього ACCESS_MODE=https.
+Built with **Python 3.10+ · Flask · SQLAlchemy · MySQL · aiogram 3 · Paramiko**.
+Deployment uses Nginx, Gunicorn, and systemd; Docker, Redis, and Node.js are not
+required.
 
-Інструкція призначена для **чистого Ubuntu Server 22.04/24.04 LTS, Python 3.10+ та MySQL 8**.
-**На чистому Ubuntu VPS ця процедура під час аудиту не виконувалася.** Локальні
-тести та перевірка конфігурацій не замінюють перевірку встановлення на сервері.
+> **Language:** the application interface and Telegram messages are currently
+> Ukrainian. This README and the migration README are written in English;
+> the linked operational guides are currently in Ukrainian.
 
-## 1. Фактична архітектура та сумісність
+## Contents
 
-| Компонент | Точка входу | Systemd |
+- [Capabilities](#capabilities)
+- [Architecture](#architecture)
+- [Security and operating model](#security-and-operating-model)
+- [Repository layout](#repository-layout)
+- [Documentation](#documentation)
+- [Deployment runbook](#deployment-runbook)
+- [Development and validation](#18-development-and-validation)
+- [License](#license)
+
+## Capabilities
+
+| Area | What ServerWatch provides |
+|---|---|
+| Resource monitoring | CPU utilization, RAM, swap, and root filesystem usage collected over SSH |
+| Service health | Configurable systemd service checks and classified journal events |
+| Dashboard | Server inventory, installation progress, configurable thresholds, and historical charts |
+| Telegram integration | Per-group server binding, scheduled reports, on-demand checks, incident notifications, and administrator acknowledgment |
+| Guided onboarding | Per-server Ed25519 keys, a generated client setup script, HTTPS callback, and SSH verification before activation |
+| Metric history | Raw samples retained for 24 hours; hourly averages and maxima retained for 90 days |
+| Delivery resilience | A database-backed outbox with retries, separate from metric collection |
+| Optional remediation | An administrator-triggered, restricted helper that adds a temporary 1 GiB swap file |
+| Optional local AI | Short metric explanations through a loopback-only Ollama endpoint; disabled by default |
+
+The default collection interval is **180 seconds**, with scheduled Telegram
+reports every **4 hours**. These serve different purposes: collection refreshes
+the stored state, while reports summarize it for the group.
+
+Reports include a rotating local library of Ukrainian comments, some containing
+informal humor and mild profanity. This feature does not require an AI service.
+Holiday greetings use the `Europe/Kyiv` timezone and appear once per group on
+configured dates. Stale or unavailable metrics do not produce humorous claims
+about current load.
+
+## Architecture
+
+Three independent Python processes share a MySQL database:
+
+```mermaid
+flowchart LR
+    Admin[Administrator] --> Nginx[Nginx]
+    Nginx --> Web[Flask / Gunicorn]
+    Web <--> DB[(MySQL)]
+    Worker[Monitoring worker] <--> DB
+    Worker -->|SSH: restricted collector| Clients[Linux servers]
+    Bot[Telegram polling / delivery] <--> DB
+    Bot <--> Telegram[Telegram groups]
+    Clients -->|HTTPS: installation callback| Nginx
+```
+
+| Process | Entry point | systemd unit | Responsibility |
+|---|---|---|---|
+| Web | `run:app` / `app.create_app()` | `serverwatch-web` | Dashboard, authentication, configuration, installation callbacks |
+| Bot | `python -m bot.main` | `serverwatch-bot` | Telegram commands, callbacks, and outbox delivery |
+| Monitor | `python -m monitoring.worker` | `serverwatch-monitor` | SSH collection, alerts, scheduled reports, jobs, aggregation, and cleanup |
+| Backup | `/usr/local/sbin/serverwatch-backup` | `serverwatch-backup.timer` | Scheduled MySQL dumps |
+
+The monitor owns scheduling. The web process does not run a scheduler, and
+Telegram polling requires no inbound bot port. Gunicorn listens on
+`/run/serverwatch/web.sock` behind Nginx. All three application services run as
+the unprivileged `serverwatch` operating-system user.
+
+Run **one monitor and one bot instance**. The monitor unit holds a filesystem
+lock, while database leases coordinate work. A web or Telegram outage does not
+stop the independent monitoring process. Telegram delivery uses at-least-once
+semantics: a crash between sending and committing may produce a duplicate.
+
+## Security and operating model
+
+- **Dashboard access:** password authentication plus TOTP, CSRF protection,
+  secure session settings, and login throttling.
+- **Secret storage:** Fernet encryption for SSH private keys and TOTP secrets;
+  one-time installation and Telegram binding secrets stored as HMAC digests.
+- **Client access:** a dedicated monitoring account with a forced SSH command,
+  restricted key options, and a validated collection protocol.
+- **Host identity:** new installations pin SSH host keys through an authenticated
+  HTTPS callback; existing connections can use verified `known_hosts` entries.
+  Changed host keys are rejected.
+- **Database privileges:** separate runtime DML and migration DDL accounts;
+  MySQL listens only on loopback in the deployment below.
+- **Service isolation:** systemd units use filesystem restrictions and run
+  without local privilege escalation.
+
+The generated installer needs root or sudo on the client during setup. Routine
+collection runs without sudo. Optional swap remediation allows only a specific
+root-owned helper without arguments; it does not grant a general shell or sudo.
+
+See [SECURITY.md](SECURITY.md) for the detailed trust boundaries and operational
+constraints. Back up the original `ENCRYPTION_KEY` separately from database
+dumps: replacing it makes existing encrypted credentials unreadable.
+
+## Repository layout
+
+```text
+app/                    Flask factory, routes, models, services, templates, assets
+bot/                    aiogram handlers, keyboards, and backend integration
+monitoring/             Worker, SSH dispatcher, remote collector, and retention
+migrations/             Flask-Migrate / Alembic revisions
+deploy/                 systemd, Nginx, and restricted sudoers configuration
+scripts/                Environment setup, administration, backup, and client setup
+tests/                  Application, security, migration, and deployment checks
+docs/                   Operational guides and deployment audit notes
+run.py                  Flask / Gunicorn application entry point
+.env.example            Supported environment variables without real credentials
+requirements.txt        Runtime dependencies
+requirements-dev.txt    Development and validation dependencies
+```
+
+## Documentation
+
+| Reference | Scope |
+|---|---|
+| [Deployment runbook](#deployment-runbook) | Fresh Ubuntu installation, networking, backups, recovery, and upgrades |
+| [Client onboarding](docs/onboarding.md) | Setup wizard, client installation, activation states, and retry behavior |
+| [HTTPS on a public IP](docs/ip-https.md) | Public access without a domain and certificate renewal |
+| [Security notes](SECURITY.md) | Authentication, SSH restrictions, secrets, and delivery guarantees |
+| [Deployment audit](docs/deployment-audit.md) | Implementation checks and the limits of automated validation |
+| [Migration README](migrations/README) | Revision history and schema maintenance workflow |
+
+## Deployment runbook
+
+This runbook targets a **fresh Ubuntu Server 22.04 or 24.04 LTS VPS, Python
+3.10+, and MySQL 8**. Python 3.10 compatibility is intentional; Ruff targets
+`py310`, and UTC timestamps use `datetime.timezone.utc`.
+
+Commands below run in Bash on the **central VPS** as your sudo administrator
+unless explicitly marked as local-computer or client-server commands. Replace
+all `YOUR_*` placeholders. The paths assume `/opt/serverwatch` and
+`/etc/serverwatch`.
+
+Choose the access method before generating the environment:
+
+| Mode | Dashboard access | Setup wizard callback |
 |---|---|---|
-| Flask/Gunicorn | `run:app`, factory `app.create_app()` | `serverwatch-web` |
-| Telegram polling і доставка outbox | `python -m bot.main` | `serverwatch-bot` |
-| SSH, аварії, звіти, агрегація/cleanup | `python -m monitoring.worker` | `serverwatch-monitor` |
-| MySQL backup | `/usr/local/sbin/serverwatch-backup` | `serverwatch-backup.timer` |
+| SSH tunnel | Local browser → SSH → VPS loopback HTTP | Tunnel-only access cannot receive client callbacks; the wizard additionally requires public HTTPS |
+| Domain HTTPS | Public HTTPS through Nginx | Supported with a trusted certificate and reachable `PUBLIC_BASE_URL` |
+| Public-IP HTTPS | Public HTTPS without a domain | Follow the dedicated IP HTTPS guide after section 9 |
 
-Три Python-процеси незалежні й працюють під Linux-користувачем `serverwatch`.
-Спільна MySQL зберігає розклад і чергу `outbox`; збій Telegram або вебпанелі
-не зупиняє моніторинг. Gunicorn слухає Unix socket `/run/serverwatch/web.sock`.
-Бот використовує polling і не відкриває вхідних портів. Scheduler працює лише
-у monitor. Його unit утримує `flock` на `instance/monitor.lock`; не запускайте
-другий worker вручну в обхід unit-файлу.
+**Validation status:** the previous deployment audit did not execute a complete
+installation on a fresh Ubuntu VPS. Automated checks use SQLite and mocked SSH
+or HTTPS; they do not establish that MySQL, systemd, Nginx, certificates, or
+Telegram work in your environment. Complete the acceptance checks in section 13.
 
-Конфігурація — `app/config.py`, розширення — `app/extensions.py`, моделі —
-`app/models/`, міграції — `migrations/`. Кореневого `config.py` немає.
-Production-залежності — `requirements.txt`, тести — `requirements-dev.txt`.
-Gunicorn встановлюється тільки на Linux; Chart.js включений локально з ліцензією.
+## 1. Runtime architecture and compatibility
 
-У звітах є короткі коментарі з гумором і легкою лайкою: по 20 для нормального,
-попереджувального й критичного навантаження. Фраза відповідає порогам конкретного
-сервера; технічні рекомендації залишаються поруч. Для кожного сервера й рівня
-20 варіантів проходять коло без повторів, потім цикл починається знову. Позиція
-зберігається у settings, тому переживає рестарт і спільна для worker та бота.
-Позитивні варіанти переважно без лайки, з самоіронією бота; негативні починаються
-з емоційного «Бляяя…», «Курва…» тощо. Є один політичний жарт серед позитивних.
-Це локальна бібліотека фраз, без зовнішнього AI/API. Для застарілих даних чи
-недоступного SSH звіт не робить жартівливих висновків про поточне навантаження.
-Нової міграції БД для цієї можливості не потрібно.
+Application configuration lives in `app/config.py`, extensions in
+`app/extensions.py`, and schema definitions in `app/models/`. There is no root
+`config.py`. Runtime dependencies are in `requirements.txt`; Gunicorn is installed
+only on Linux. Chart.js and its license are included in the repository.
 
-У першому звіті святкового дня бот додає привітання один раз на Telegram-групу,
-навіть якщо в ній кілька серверів. Дата визначається в Europe/Kyiv з урахуванням
-літнього часу; потрібний пакет tzdata включений у requirements.txt.
-Календар: 1 січня, 14 лютого, 8 березня, 1 квітня, 28 червня, 24 серпня,
-1 жовтня, 6 грудня, 25 грудня та 31 грудня. Перелік і тексти — у
-app/services/report_holidays.py. Привітання не замінює аварійну інформацію.
-Рухомі свята до цього фіксованого календаря не включені.
-Дати 1 жовтня звірено з [офіційним календарем](https://zakon.rada.gov.ua/laws/main/day193).
+Use the entry points from the architecture table above. Never start a second
+monitor manually alongside the systemd unit.
 
+## 2. Preflight checks
 
-
-У [Ubuntu 24.04](https://packages.ubuntu.com/noble/python3) системний Python 3.12,
-у [Ubuntu 22.04](https://packages.ubuntu.com/jammy/python3) — 3.10. Код сумісний з
-Python 3.10+: для UTC використовується `datetime.timezone.utc`, а не доданий у 3.11
-аліас `datetime.UTC`. Ruff налаштовано на py310, щоб автоматичні виправлення не
-повертали цей несумісний імпорт. Змінювати системний Python або перевстановлювати
-VPS для усунення цієї помилки не потрібно. Повне розгортання на обох версіях
-Ubuntu слід перевірити на своєму VPS; локальні Python-тести не замінюють Linux-перевірку.
-
-## 2. Перед початком
-
-Блоки `bash` виконуйте **на центральному VPS** у Bash від власного sudo-адміністратора,
-крім явно позначених клієнтських/локальних команд. `sudo -u serverwatch` означає
-запуск застосунку без root. Не вмикайте `set -x`, щоб секрети не потрапляли в логи.
-
-Перевірте ОС, ресурси, sudo та Python. Якщо остання команда завершується помилкою,
-зупиніться: потрібен підтримуваний інтерпретатор.
+Confirm the operating system, available resources, sudo access, and Python
+version before proceeding. Do not enable shell tracing (`set -x`) when handling
+secrets.
 
 ```bash
 cat /etc/os-release
@@ -84,11 +184,15 @@ df -h /
 id
 sudo -v
 python3 --version
-python3 -c 'import sys; assert sys.version_info >= (3,10), "Потрібен Python 3.10+"'
+python3 -c 'import sys; assert sys.version_info >= (3,10), "Python 3.10+ is required"'
 ```
 
-Задайте **свої параметри** замість прикладів. `SSH_PORT` — чинний порт SSH
-центрального VPS. Після перепідключення повторно задайте ці змінні.
+Set your deployment parameters. Re-export them after reconnecting.
+`SSH_PORT` is the central VPS's existing SSH port. For either public HTTPS method,
+set `ACCESS_MODE=https`; set `DOMAIN` only when using a domain.
+
+These are shell deployment parameters. The application does not read `APP_ENV`
+or `DOMAIN` from its runtime environment.
 
 ```bash
 export REPO_URL='https://github.com/YOUR_ORG/YOUR_REPOSITORY.git'
@@ -97,17 +201,14 @@ export SSH_PORT='22'
 export SSH_ADMIN='YOUR_EXISTING_SUDO_LOGIN'
 export ADMIN_IP='YOUR_CURRENT_PUBLIC_IP'
 export ACCESS_MODE='tunnel'
-# Лише якщо є домен: export ACCESS_MODE='https'
-# Лише якщо є домен: export DOMAIN='YOUR_REAL_DOMAIN'
+# For public HTTPS: export ACCESS_MODE='https'
+# For domain HTTPS only: export DOMAIN='YOUR_REAL_DOMAIN'
 ```
 
-Ці змінні — параметри інсталяції, а не Flask. Код **не читає APP_ENV або DOMAIN**;
-їх додавання в `.env` не налаштує застосунок.
+## 3. System packages
 
-## 3. Системні пакети
-
-Оновіть APT і пакети. Якщо `/var/run/reboot-required` існує, заплануйте reboot
-до наступних кроків і знову підключіться до VPS.
+Update the host. If a reboot is required, schedule it now and reconnect before
+continuing.
 
 ```bash
 sudo apt update
@@ -115,9 +216,9 @@ sudo apt upgrade -y
 if test -f /var/run/reboot-required; then cat /var/run/reboot-required; fi
 ```
 
-Установіть Python/venv, інструменти збірки wheels, Git, SSH, MySQL, Nginx,
-Certbot, firewall, Fail2ban та засоби перевірки/backup. Certbot використовується
-лише в доменній гілці. Увімкніть синхронізацію часу для TOTP.
+Install runtime and administration tools, then enable time synchronization
+for TOTP. The domain HTTPS branch uses the packaged Certbot; the public-IP branch
+has its own instructions.
 
 ```bash
 sudo apt install -y python3 python3-venv python3-dev build-essential libffi-dev \
@@ -127,8 +228,8 @@ sudo timedatectl set-ntp true
 sudo systemctl enable --now mysql nginx
 ```
 
-Перевірте встановлені команди та запущені служби. Не продовжуйте, якщо MySQL
-або Nginx падає; дивіться troubleshooting нижче.
+Verify the installed tools and running services. Resolve MySQL or Nginx
+startup failures before continuing.
 
 ```bash
 python3 --version
@@ -143,11 +244,11 @@ sudo timedatectl status
 sudo systemctl status mysql nginx --no-pager
 ```
 
-## 4. Користувач, каталоги та Python venv
+## 4. Service account, directories, and virtual environment
 
-Створіть системного користувача без інтерактивного входу. `--no-create-home`
-залишає робочий каталог порожнім для clone. Ці команди — для першої інсталяції,
-не для перезапису вже наявного проєкту.
+Create the dedicated account and clone into an empty application directory.
+These commands are for a first installation, not for replacing an existing
+checkout.
 
 ```bash
 sudo adduser --system --group --no-create-home --home /opt/serverwatch \
@@ -159,8 +260,7 @@ sudo install -d -o root -g serverwatch -m 0750 /etc/serverwatch
 cd /opt/serverwatch
 ```
 
-Перевірте файли клонованого репозиторію. Якщо clone не спрацював, спочатку
-виправте URL/доступ до Git, а не переходьте до встановлення залежностей.
+Confirm the checkout and expected entry points before installing dependencies.
 
 ```bash
 sudo -u serverwatch git -C /opt/serverwatch status --short
@@ -168,8 +268,8 @@ ls -l run.py requirements.txt .env.example app/config.py migrations/env.py
 ls -l bot/main.py monitoring/worker.py deploy/serverwatch-web.service
 ```
 
-Створіть venv системним Python 3.10+ і встановіть залежності саме в нього. Системний
-`sudo pip` не потрібен; усі процеси використовують `/opt/serverwatch/.venv`.
+Create the virtual environment and install runtime requirements. All service
+processes use this interpreter; system-wide `sudo pip` is unnecessary.
 
 ```bash
 sudo -u serverwatch python3 -m venv /opt/serverwatch/.venv
@@ -180,13 +280,15 @@ sudo -u serverwatch /opt/serverwatch/.venv/bin/python -c 'import flask, flask_mi
 /opt/serverwatch/.venv/bin/gunicorn --version
 ```
 
-Для ручної роботи активація — `source /opt/serverwatch/.venv/bin/activate`,
-вихід — `deactivate`. Нижче абсолютні шляхи до Python роблять активацію зайвою.
+For interactive work, activate the environment with
+`source /opt/serverwatch/.venv/bin/activate`. The absolute paths used here make
+activation unnecessary for the remaining deployment steps.
 
-## 5. MySQL: локальний доступ, запуск та перевірка
+## 5. MySQL configuration
 
-Обмежте classic port і X Protocol адресою loopback; невеликий buffer pool
-підходить як початкова конфігурація VPS із 1 GB RAM. Перевірте cnf до рестарту.
+Bind both MySQL protocols to loopback. The small buffer pool below is an
+initial configuration for a small VPS; adjust it to your workload. Validate the
+configuration before restarting MySQL.
 
 ```bash
 sudo tee /etc/mysql/mysql.conf.d/serverwatch.cnf >/dev/null <<'EOF'
@@ -204,8 +306,8 @@ sudo systemctl is-enabled mysql
 sudo systemctl status mysql --no-pager
 ```
 
-У стандартному Ubuntu root MySQL входить через `sudo mysql` та auth_socket,
-без встановлення root-пароля. Перевірте доступ, параметри та listeners.
+Ubuntu commonly uses socket authentication for the MySQL root account.
+Verify access and listeners, then open the MySQL console.
 
 ```bash
 sudo mysql --execute "SELECT VERSION(), CURRENT_USER(); SHOW VARIABLES WHERE Variable_name IN ('bind_address','mysqlx_bind_address','port');"
@@ -213,8 +315,8 @@ sudo ss -lntp '( sport = :3306 or sport = :33060 )'
 sudo mysql
 ```
 
-У відкритій MySQL-консолі виконайте цей SQL; EXIT повертає до Bash.
-Змінювати root на парольну автентифікацію для застосунку не потрібно.
+Run this SQL in the MySQL console; `EXIT` returns to Bash. A root password is
+not required for the application's database accounts.
 
 ```sql
 SELECT user, host, plugin FROM mysql.user WHERE user = 'root';
@@ -222,45 +324,35 @@ SHOW VARIABLES LIKE 'character_set_server';
 EXIT;
 ```
 
-Для 3306/33060 допустимий тільки `127.0.0.1`, не `0.0.0.0`, `*` або `[::]`.
-3306 не відкривайте у firewall. Джерело: [Ubuntu MySQL](https://ubuntu.com/server/docs/install-and-configure-a-mysql-server).
+Ports 3306 and 33060 must listen only on `127.0.0.1`, never on `0.0.0.0`,
+`*`, or `[::]`. Do not expose them through the firewall.
 
-## 6. Environment, база та окремі ролі
+## 6. Environment and database accounts
 
-Створіть бота через `/newbot` у @BotFather і збережіть токен у менеджері паролів.
-Bot service поки не запускайте. Переконайтеся, що БД/ролей ще немає: якщо вони
-існують, це не чисте встановлення; не видаляйте дані й не генеруйте Fernet заново.
+Create a Telegram bot with `/newbot` in BotFather and store its token privately.
+Keep the bot service stopped until the token and administrator ID are configured.
+Check that the database and accounts do not already exist. If they do, use the
+upgrade or recovery workflow; do not regenerate secrets for an existing database.
 
 ```bash
 sudo mysql --execute "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='serverwatch'; SELECT user,host FROM mysql.user WHERE user IN ('serverwatch','serverwatch_migrate');"
 ```
 
-Генератор із репозиторію приховано запитає токен і числовий Telegram User ID.
-Якщо ID невідомий, натисніть Enter; його можна визначити нижче. Він генерує
-кожний пароль БД і SECRET_KEY через `secrets.token_hex(32)`, Fernet-ключ через
-`Fernet.generate_key()`, записує файли з обмеженими правами, не друкує секрети
-і відмовляється перезаписувати наявну конфігурацію.
+Generate the initial environment. The script privately prompts for the token
+and numeric administrator ID; the ID can be supplied later. It generates random
+database passwords and `SECRET_KEY`, creates a Fernet key, applies restricted file
+permissions, and refuses to overwrite an existing configuration.
 
 ```bash
 sudo /opt/serverwatch/.venv/bin/python /opt/serverwatch/scripts/setup_environment.py --access "$ACCESS_MODE"
 sudo stat -c '%U:%G %a %n' /etc/serverwatch/serverwatch.env /etc/serverwatch/migration.env /etc/serverwatch/bootstrap.sql
 ```
 
-| Файл | Власник/режим | Призначення |
-|---|---|---|
-| `/etc/serverwatch/serverwatch.env` | root:serverwatch 0640 | Runtime для трьох служб |
-| `/etc/serverwatch/migration.env` | root:root 0600 | DATABASE_URL окремої DDL-ролі |
-| `/etc/serverwatch/bootstrap.sql` | root:root 0600 | Одноразове створення БД та ролей |
-
-`bootstrap.sql` містить CREATE DATABASE `serverwatch` з `utf8mb4` та
-`utf8mb4_unicode_ci`, CREATE USER/GRANT для `serverwatch@127.0.0.1`
-(SELECT, INSERT, UPDATE, DELETE) та `serverwatch_migrate@127.0.0.1`
-(ALL PRIVILEGES тільки на `serverwatch.*`). Паролі випадкові, URI екрановані;
-вставляти секрети вручну в SQL/history не потрібно. `FLUSH PRIVILEGES` після
-CREATE USER/GRANT не потрібна. Root не використовується runtime-процесами.
-
-Імпортуйте SQL через root socket без `--force`, перевірте кодування/права та
-увійдіть Python-драйвером від імені нового runtime-користувача.
+Import the bootstrap SQL through the root socket, then check grants and the
+runtime account. The database uses `utf8mb4` and `utf8mb4_unicode_ci`.
+`serverwatch@127.0.0.1` receives SELECT/INSERT/UPDATE/DELETE;
+`serverwatch_migrate@127.0.0.1` receives schema privileges only on `serverwatch.*`.
+Runtime services never use the root database account.
 
 ```bash
 sudo bash -c '/usr/bin/mysql --protocol=SOCKET --user=root < /etc/serverwatch/bootstrap.sql'
@@ -268,70 +360,81 @@ sudo mysql --execute "SHOW CREATE DATABASE serverwatch; SHOW GRANTS FOR 'serverw
 sudo -u serverwatch /opt/serverwatch/.venv/bin/python /opt/serverwatch/scripts/manage.py check-db
 ```
 
-`check-db` читає runtime DATABASE_URL, підключається через PyMySQL і виконує
-SELECT 1. Очікується `MySQL: OK ... user=serverwatch`; паролі не виводяться.
-Лише після успішної перевірки видаліть одноразовий SQL; migration.env залиште.
+After `check-db` succeeds, delete the one-time SQL file. Keep `migration.env`.
+The check prints connection status without passwords.
 
 ```bash
 sudo rm -- /etc/serverwatch/bootstrap.sql
 ```
 
-### Усі змінні, які справді читає застосунок
+### Runtime configuration reference
 
-| Змінна | Призначення / значення |
+The application reads the following values from its environment:
+
+| Variable | Purpose / default |
 |---|---|
-| PUBLIC_BASE_URL | Публічна HTTPS-адреса центральної панелі для клієнтського callback, без шляху; обов’язкова для майстра |
-| SECRET_KEY | 64 випадкові hex-символи; сесії й HMAC кодів |
-| ENCRYPTION_KEY | Fernet; SSH-ключі й TOTP-секрети |
-| DATABASE_URL | `mysql+pymysql://serverwatch:ПАРОЛЬ@127.0.0.1/serverwatch?charset=utf8mb4` |
-| TELEGRAM_BOT_TOKEN | Токен BotFather |
-| TELEGRAM_ADMIN_ID | Додатний числовий ID адміністратора |
-| SSH_KNOWN_HOSTS | `/etc/serverwatch/known_hosts` |
-| SSH_TIMEOUT | `12`; timeout підключення, збір має окремий обмежений timeout |
-| MONITOR_CONCURRENCY | `2`; код обмежує діапазон 1–4 |
-| SESSION_COOKIE_SECURE | false тільки для loopback HTTP через SSH-тунель, true для HTTPS |
-| AI_ENABLED | false, AI не потрібен для стандартних звітів |
-| AI_URL | `http://127.0.0.1:11434/api/generate`, необов’язковий локальний Ollama |
-| AI_MODEL | `llama3.2:1b`, лише коли ввімкнений AI |
+| `PUBLIC_BASE_URL` | Public HTTPS origin of the central panel; required for setup callbacks, without a path, credentials, query, or fragment |
+| `SECRET_KEY` | Session signing and HMAC secrets; the generator creates 64 random hex characters |
+| `ENCRYPTION_KEY` | Fernet key for SSH private keys and TOTP secrets; preserve across upgrades and restores |
+| `DATABASE_URL` | Runtime SQLAlchemy URI, e.g. `mysql+pymysql://serverwatch:PASSWORD@127.0.0.1/serverwatch?charset=utf8mb4` |
+| `TELEGRAM_BOT_TOKEN` | BotFather token |
+| `TELEGRAM_ADMIN_ID` | Positive numeric Telegram user ID allowed to bind groups and perform administrative actions |
+| `SSH_KNOWN_HOSTS` | Legacy connection trust store; default `/etc/serverwatch/known_hosts` |
+| `SSH_TIMEOUT` | SSH connection timeout in seconds; default `12` |
+| `MONITOR_CONCURRENCY` | Concurrent checks; default `2`, clamped to `1–4` |
+| `SESSION_COOKIE_SECURE` | `true` for HTTPS; `false` only for loopback HTTP through the SSH tunnel |
+| `AI_ENABLED` | Optional local AI explanations; default `false` |
+| `AI_URL` | Loopback Ollama endpoint; default `http://127.0.0.1:11434/api/generate` |
+| `AI_MODEL` | Optional Ollama model; default `llama3.2:1b` |
 
-На 1 GB VPS локальну LLM не встановлюйте. Для власних паролів у URI потрібне
-percent-encoding; генератор робить це автоматично. APP_ENV і DOMAIN у коді відсутні.
-Міграційний DATABASE_URL не передається runtime-службам.
+The migration helper alone reads the separate migration `DATABASE_URL`.
+Database passwords in custom URIs require percent-encoding; the generator handles
+this automatically. Do not run a local LLM on a 1 GB VPS; standard reports work
+without it.
 
-Редагуйте конфігурацію через sudoedit. Environment читають systemd і dotenv;
-**не виконуйте ці файли через source або `. файл`**. Не друкуйте ключі через
-cat/echo та не додавайте .env у Git; `.env.example` — тільки приклад.
+| Generated file | Owner / mode | Role |
+|---|---|---|
+| `/etc/serverwatch/serverwatch.env` | `root:serverwatch` / `0640` | Runtime configuration for all three services |
+| `/etc/serverwatch/migration.env` | `root:root` / `0600` | Migration database credentials |
+| `/etc/serverwatch/bootstrap.sql` | `root:root` / `0600` | One-time database/account creation; remove after verification |
+
+Create the legacy trust-store file if it is absent; preserve any existing host
+records. New clients use database-pinned host keys, but configuration backups
+also include this file.
+
+```bash
+if ! sudo test -e /etc/serverwatch/known_hosts; then
+  sudo install -o root -g serverwatch -m 0640 /dev/null /etc/serverwatch/known_hosts
+fi
+```
+
+Edit runtime configuration with `sudoedit`. systemd and python-dotenv read
+these files: **do not execute them with `source` or `. file`**. Keep real
+credentials out of Git and terminal output; `.env.example` is a reference.
 
 ```bash
 sudoedit /etc/serverwatch/serverwatch.env
 ```
 
-### Telegram User ID
-
-Якщо ID не було задано, надішліть власному боту приватне повідомлення з головного
-акаунта та виконайте getUpdates через helper. Bot service має бути зупинений;
-другого polling-процесу або webhook бути не повинно. Виводяться лише ID/username.
+If the administrator ID is unknown, send your bot a private message from the
+intended administrator account. With polling stopped and no webhook or competing
+bot process, retrieve the sender ID and enter it as `TELEGRAM_ADMIN_ID`.
+Verify the numeric ID belongs to you. A username or mention does not authorize
+administrative actions; the bot requires a token and a positive ID.
 
 ```bash
 sudo -u serverwatch /opt/serverwatch/.venv/bin/python /opt/serverwatch/scripts/manage.py telegram-id
 sudoedit /etc/serverwatch/serverwatch.env
 ```
 
-Замініть TELEGRAM_ADMIN_ID=0 на свій звірений додатний ID. Не копіюйте ID
-стороннього відправника. @Yureweo — згадка, а не механізм авторизації.
-Без токена та додатного ID бот не запуститься.
+## 7. Migrations and administrator account
 
-## 7. Міграції та адміністратор
+Apply the committed migrations. Do not run `db init`, `db migrate`,
+`db.create_all`, or `stamp head` as part of production installation.
 
-Flask-Migrate вже налаштований у factory через `migrate.init_app(app, db)`.
-Моделі завантажуються, початкова ревізія — `c99481d201d8`, поточна —
-`4e2c9d8f610a` (майстер підключення). На VPS **не запускайте
-db init, db migrate, db.create_all або stamp head**: потрібен upgrade готової
-міграції, інакше можна приховати відсутню схему.
-
-Helper upgrade читає root-only migration.env, знижує права до serverwatch та
-виконує `.venv/bin/python -m flask --app run db upgrade`. Перевірте таблиці й
-поточну ревізію після застосування; Flask CLI не виконується від root.
+The initial revision is `c99481d201d8`; `4e2c9d8f610a` adds guided onboarding.
+The upgrade helper reads the migration credentials as root, then drops operating
+system privileges before invoking Flask CLI.
 
 ```bash
 sudo /opt/serverwatch/.venv/bin/python /opt/serverwatch/scripts/manage.py upgrade
@@ -339,32 +442,25 @@ sudo -u serverwatch /opt/serverwatch/.venv/bin/python /opt/serverwatch/scripts/m
 sudo mysql --execute "SHOW TABLES FROM serverwatch; SELECT version_num FROM serverwatch.alembic_version;"
 ```
 
-Очікуються users, servers, server_metrics, server_hourly_metrics, server_logs,
-alerts, admin_actions, login_attempts, settings, jobs, outbox, alembic_version.
-status показує лічильники й час, без ключів/токенів/хешів паролів.
-
-Створіть адміністратора реальною командою create-admin. Пароль вводиться
-приховано двічі; мінімум 14 символів. Не передавайте його через --password.
+Check that the schema revision and expected tables exist. Create the web
+administrator interactively; the password is entered twice and must contain at
+least 14 characters. Do not pass it as a command-line argument.
 
 ```bash
 sudo -u serverwatch /opt/serverwatch/.venv/bin/python /opt/serverwatch/scripts/manage.py create-admin
 ```
 
-Після першого парольного входу в браузері відскануйте QR у Google Authenticator
-і підтвердьте TOTP. До цього панель закрита; наступні входи теж вимагають TOTP.
-Нові міграції створює розробник на окремій БД командою `flask --app run db migrate
--m "Опис"`, перевіряє ревізію й комітить її; це не крок production-встановлення.
+Complete TOTP enrollment in the browser after the first password login.
+Developers create new revisions against a separate development database, review
+the generated operations, and commit the revision. See the migration README.
 
+## 8. systemd services
 
-## 8. Systemd: три окремі процеси
-
-Gunicorn 25.3+ запускається з --no-control-socket: керування виконує systemd.
-Це запобігає створенню .gunicorn у read-only каталозі проєкту;
-ProtectSystem=strict залишається ввімкненим.
-
-Нижче — повний вміст фактичних unit-файлів. EnvironmentFile читає systemd до
-запуску процесу. Web має групу www-data для socket та додаткову serverwatch для
-known_hosts; /run/serverwatch створюється автоматично. instance створено раніше.
+The following definitions mirror the tracked unit files. Install the files
+from `deploy/` rather than maintaining separate copies. The web unit uses the
+`www-data` group for socket access and the supplementary `serverwatch` group for
+configuration access. systemd recreates `/run/serverwatch` at service start.
+Keep Gunicorn's control socket disabled with `--no-control-socket`.
 
 ### deploy/serverwatch-web.service
 
@@ -457,8 +553,8 @@ ReadWritePaths=/opt/serverwatch/instance
 WantedBy=multi-user.target
 ```
 
-Встановіть файли від root, перевірте їх, перезавантажте systemd, увімкніть
-автозапуск і запустіть служби. Не запускайте бот до заповнення токена та ID.
+Install and validate the three units, then enable and start them. Finish the
+Telegram configuration before starting the bot.
 
 ```bash
 sudo install -o root -g root -m 0644 /opt/serverwatch/deploy/serverwatch-web.service /etc/systemd/system/serverwatch-web.service
@@ -472,8 +568,8 @@ sudo systemctl status serverwatch-web serverwatch-bot serverwatch-monitor --no-p
 sudo systemctl is-enabled serverwatch-web serverwatch-bot serverwatch-monitor
 ```
 
-Перевірте журнал кожного компонента та доступ до socket саме від Nginx-користувача.
-Остання команда має повернути HTTP 200. Після reboot каталог /run відновить systemd.
+Inspect each journal and test the Unix socket as the Nginx user. The login
+request should return HTTP 200.
 
 ```bash
 sudo journalctl -u serverwatch-web -n 100 --no-pager
@@ -484,25 +580,26 @@ sudo ls -l /run/serverwatch/web.sock
 sudo -u www-data curl --unix-socket /run/serverwatch/web.sock -I http://localhost/login
 ```
 
-## 9. UFW, SSH та Fail2ban
+## 9. Firewall, SSH, and Fail2ban
 
-До ufw enable перевірте **реальний SSH-порт**, правило для нього, другу сесію
-та доступну консоль провайдера. Не змінюйте порт одночасно з firewall. Перевірте
-також cloud firewall. За наявності Match-блоків sshd врахуйте їх для свого логіна.
+Before enabling UFW, confirm the current SSH port, an allowed source address,
+a second working session, and access to the provider recovery console. Check the
+provider firewall too. Keep the current session open throughout these changes;
+do not change the SSH port at the same time.
 
 ```bash
 sudo sshd -T | head -n 30
 sudo ss -lntp
-printf 'Дозволити SSH із %s на TCP %s\n' "$ADMIN_IP" "$SSH_PORT"
+printf 'Allow SSH from %s on TCP %s\n' "$ADMIN_IP" "$SSH_PORT"
 sudo ufw allow from "$ADMIN_IP" to any port "$SSH_PORT" proto tcp
 sudo ufw status numbered
 sudo ufw show added
 ```
 
-Якщо адреса адміністратора змінна, свідомо використайте натомість
-`sudo ufw allow "$SSH_PORT/tcp"`, а пізніше обмежте доступ VPN/сталою адресою.
-Не видаляйте робоче правило до перевірки нового входу. Лише після перевірки
-SSH-правила додайте вебпорти для HTTPS і ввімкніть firewall. Tunnel їх не потребує.
+If your administrator IP changes frequently, an explicit alternative is
+`sudo ufw allow "$SSH_PORT/tcp"`; restrict it later using a stable address or VPN.
+Do not remove a working rule before confirming a new connection. Allow web ports
+only for public HTTPS, then enable UFW.
 
 ```bash
 if test "$ACCESS_MODE" = 'https'; then sudo ufw allow 'Nginx Full'; fi
@@ -512,14 +609,12 @@ sudo ufw enable
 sudo ufw status verbose
 ```
 
-З **іншого термінала свого комп’ютера** перевірте нову SSH-сесію на чинному порту.
-Не продовжуйте hardening до успіху. На чистому VPS у tunnel-гілці назовні
-потрібен тільки SSH; 8080, 8000, 3306/33060 не відкривайте. На машині зі старими
-правилами перевірте зайві дозволи вручну, не застосовуйте сліпий ufw reset.
+From another terminal on your computer, verify a new SSH connection on the
+current port. Keep ports 8080, 8000, 3306, and 33060 private. Review pre-existing
+rules rather than blindly resetting UFW.
 
-Якщо ви ще входите як root і не маєте іншого sudo-адміністратора, створіть його
-до заборони root-login. Вставте **публічний** ключ у редакторі. Якщо ваш наявний
-sudo-користувач уже працює з ключем, цей блок пропустіть.
+If you currently have only root access, create a sudo administrator and install
+their **public** SSH key. Skip this block if a suitable account already works.
 
 ```bash
 sudo adduser opsadmin
@@ -529,9 +624,9 @@ sudo -u opsadmin nano /home/opsadmin/.ssh/authorized_keys
 sudo chmod 0600 /home/opsadmin/.ssh/authorized_keys
 ```
 
-З іншого термінала перевірте `ssh -p YOUR_PORT opsadmin@YOUR_VPS_IP` та sudo -v.
-Тільки після перевірки ключового входу, sudo й консолі відновлення створіть
-hardening-файл, перевірте синтаксис і reload. Стару сесію поки не закривайте.
+Verify key-based login as the sudo administrator and run `sudo -v` in the
+new session. Only then disable password and root login. Validate before reload
+and keep the old session open.
 
 ```bash
 sudo tee /etc/ssh/sshd_config.d/00-serverwatch-hardening.conf >/dev/null <<'EOF'
@@ -544,8 +639,8 @@ sudo sshd -t
 sudo systemctl reload ssh
 ```
 
-Знову перевірте новий вхід. Потім увімкніть Fail2ban для фактичного SSH_PORT;
-backend systemd читає journal. Перевірка -t виконується до рестарту служби.
+Verify a fresh SSH login again, then enable Fail2ban for the actual SSH port.
+Its systemd backend reads the journal.
 
 ```bash
 printf '[sshd]\nenabled=true\nbackend=systemd\nport=%s\nmaxretry=5\nfindtime=10m\nbantime=15m\n' "$SSH_PORT" | sudo tee /etc/fail2ban/jail.d/serverwatch.local >/dev/null
@@ -555,8 +650,8 @@ sudo systemctl restart fail2ban
 sudo fail2ban-client status sshd
 ```
 
-Обмежте загальний обсяг journald для SSD 40 GB. Це квота всього VPS, не тільки
-ServerWatch; перегляд логів далі виконується через journalctl.
+Optionally cap journald disk usage. These quotas apply to the entire VPS,
+not just ServerWatch.
 
 ```bash
 sudo install -d -m 0755 /etc/systemd/journald.conf.d
@@ -564,29 +659,29 @@ printf '[Journal]\nSystemMaxUse=100M\nRuntimeMaxUse=30M\n' | sudo tee /etc/syste
 sudo systemctl restart systemd-journald
 ```
 
-## 10. Nginx і вибір доступу
+## 10. Nginx and access methods
 
-Установіть proxy snippet та global map/limit_req_zone. У стандартному Ubuntu
-conf.d включається всередині http, де дозволені ці директиви. Не вставляйте
-nginx-limits.conf всередину server. Зона обмежує тільки POST /login і /totp:
-5 запитів/хвилину з burst=5, при перевищенні HTTP 429. У тунелі клієнтська адреса
-для Nginx — loopback, отже ліміт спільний. БД також обмежує невдалі входи.
+Install the shared proxy snippet and rate-limit configuration. The limits file
+belongs in the Nginx `http` context, normally included through `conf.d`, rather
+than inside a `server` block. POST requests to `/login` and `/totp` are limited to
+5 per minute with a burst of 5; excess requests receive HTTP 429. Tunnel users
+share the loopback source address.
+
+The proxy overwrites forwarded address/protocol headers. Gunicorn remains on its
+Unix socket. Choose **one** of the access branches below. The symlink commands
+assume a fresh Nginx installation.
 
 ```bash
 sudo install -o root -g root -m 0644 /opt/serverwatch/deploy/nginx-proxy.conf /etc/nginx/snippets/serverwatch-proxy.conf
 sudo install -o root -g root -m 0644 /opt/serverwatch/deploy/nginx-limits.conf /etc/nginx/conf.d/serverwatch-limits.conf
 ```
 
-Proxy перезаписує X-Forwarded-For/Proto, не довіряючи зовнішнім заголовкам.
-Gunicorn залишається тільки на Unix socket. Джерело директив:
-[Nginx limit_req](https://nginx.org/en/docs/http/ngx_http_limit_req_module.html).
-Виконайте **тільки одну гілку**. Стандартний default видаляється лише як symlink
-чистої інсталяції, інші сайти не змінюються.
+### 10A. SSH tunnel
 
-### 10A. Без домену: SSH-тунель
-
-Установіть loopback server. Порт 8080 у UFW не відкривайте. Перевірте конфігурацію
-до reload, HTTP та фактичний listener після нього.
+Use `ACCESS_MODE=tunnel` and `SESSION_COOKIE_SECURE=false` for loopback HTTP
+inside SSH. Do not open port 8080 in the firewall. After reload, expect HTTP 200
+and a listener bound only to `127.0.0.1:8080`. This branch does not provide the
+public HTTPS endpoint required by the client setup wizard.
 
 ```bash
 sudo install -o root -g root -m 0644 /opt/serverwatch/deploy/nginx-tunnel.conf /etc/nginx/sites-available/serverwatch
@@ -598,29 +693,21 @@ curl -I http://127.0.0.1:8080/login
 sudo ss -lntp '( sport = :8080 )'
 ```
 
-Очікуються HTTP 200 та 127.0.0.1:8080, без 0.0.0.0 або [::] на 8080.
-Генератор для tunnel задає SESSION_COOKIE_SECURE=false: браузер використовує
-локальний HTTP, а весь віддалений шлях захищає SSH. Для публічної панелі це
-значення не використовуйте. Домен і Certbot у цій гілці не потрібні.
-
-Наступну команду виконуйте **на своєму комп’ютері**, замінивши власні SSH-дані.
-Локальний 18080 також слухає лише loopback. Термінал залиште відкритим.
+Run this command on **your local computer** with your real SSH details and
+leave the terminal open. Open `http://127.0.0.1:18080/login` in the browser.
+The administrator's SSH account must permit TCP forwarding; the restricted client
+monitoring account is not an administrative tunnel account.
 
 ```bash
 ssh -p YOUR_SSH_PORT -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -L 127.0.0.1:18080:127.0.0.1:8080 YOUR_SUDO_LOGIN@YOUR_VPS_PUBLIC_IP
 ```
 
-Відкрийте `http://127.0.0.1:18080/login` у браузері. SSH-сервер має дозволяти
-TCP forwarding для вашого адміністративного користувача. Якщо він обмежений,
-перевірте Match-блоки sshd; не відкривайте 8080 назовні. Клієнтський користувач
-моніторингу з restrict не призначений для адміністративного тунелю.
+### 10B. Domain HTTPS
 
-### 10B. Необов’язково: домен і HTTPS
-
-Виконуйте тільки за наявності власного DNS A-запису на VPS; AAAA, якщо задано,
-також повинен вести на чинну IPv6-адресу. DOMAIN — звичайне DNS-ім’я без
-протоколу/слешів. У runtime environment має бути SESSION_COOKIE_SECURE=true.
-Якщо переходите з tunnel, змініть його через sudoedit і перезапустіть web.
+Skip this branch when using a tunnel or public-IP HTTPS. Point the domain's DNS
+A record at the VPS; any AAAA record must also be correct. Set
+`SESSION_COOKIE_SECURE=true` through `sudoedit` before restarting the web service.
+`DOMAIN` must be a plain hostname without a scheme or path.
 
 ```bash
 export DOMAIN='YOUR_REAL_DOMAIN'
@@ -634,10 +721,9 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-Перед отриманням сертифіката перевірте виконані правила розділу 9 для HTTPS:
-80/443 повинні бути доступні і в UFW, і у firewall провайдера. До TLS **не вводьте
-пароль/TOTP/SSH-ключ через HTTP**. Certbot запитає email та згоду з умовами,
-встановить сертифікат і redirect. Перевірка curl виконується без -k.
+Ensure ports 80 and 443 are reachable through UFW and the provider firewall.
+Issue the certificate, enable renewal, and test HTTPS without disabling trust
+verification. Do not submit credentials to the initial plain-HTTP site.
 
 ```bash
 sudo certbot --nginx -d "$DOMAIN" --redirect
@@ -649,80 +735,92 @@ sudo systemctl list-timers certbot.timer --all
 sudo certbot renew --dry-run
 ```
 
-Очікується HTTPS 200 без помилок довіри. Відкрийте `https://ВАШ_ДОМЕН/login`.
-Не ігноруйте попередження сертифіката. Renew описаний у
-[Certbot documentation](https://eff-certbot.readthedocs.io/en/stable/using.html).
-Без домену пропустіть цю гілку. Прямий HTTPS на IP налаштовується за
-[docs/ip-https.md](docs/ip-https.md), з новим Certbot та окремим timer поновлення.
+### 10C. HTTPS on a public IP
 
-## 11. Перший вхід і клієнтські сервери
+To use public HTTPS without a domain, follow [docs/ip-https.md](docs/ip-https.md)
+after completing section 9 with `ACCESS_MODE=https`. Skip branches 10A and 10B;
+the IP guide supplies the appropriate Nginx and certificate-renewal configuration.
+After HTTPS is working, continue with section 11.
 
-Відкрийте браузер за URL обраної гілки, введіть пароль, відскануйте QR у Google
-Authenticator/сумісному TOTP-застосунку. Підтвердьте 6-значний код. Перевірте
-вихід і новий вхід: без TOTP dashboard недоступний.
+For any public deployment, expect a trusted HTTPS response and keep
+`SESSION_COOKIE_SECURE=true`. Do not bypass certificate warnings.
 
-### Підключення нового клієнтського сервера
+## 11. First login and client onboarding
 
-Новий сервер підключається через майстер у панелі без ручного створення SSH-ключів
-і редагування клієнтських конфігурацій. Для callback потрібен доступний клієнту
-**публічний HTTPS** центрального ServerWatch з довіреним сертифікатом. Домен
-не обов’язковий: підійде [HTTPS на IP](docs/ip-https.md).
-Один лише loopback HTTP через SSH-тунель не приймає встановлення з клієнта.
+Open the selected dashboard URL, enter the administrator password, scan the
+QR code in a compatible authenticator, and confirm the six-digit TOTP code.
+Verify logout and a subsequent login; the dashboard requires TOTP.
 
-Один раз задайте в `/etc/serverwatch/serverwatch.env`
-`PUBLIC_BASE_URL=https://92.5.162.96` (або вашу адресу центральної панелі)
-та перезапустіть три служби. Не додавайте `/login`. Для вже встановленого
-ServerWatch спочатку застосуйте оновлення й міграцію з розділу 16.
+### Three-step client onboarding
 
-1. У панелі відкрийте **Сервери → Додати сервер**: назва, публічна IPv4, SSH-порт,
-   адміністративний користувач встановлення (`root` або користувач із sudo),
-   клієнт та інтервал. Telegram Group ID можна залишити порожнім.
-2. Натисніть **Створити сервер**. Python створить індивідуальний Ed25519 та
-   зашифрує приватний ключ. Він залишається на центральному VPS й не показується.
-3. На другому кроці натисніть **Скопіювати весь скрипт** або **Завантажити .sh**.
-   Скрипт містить секретний одноразовий токен на одну годину: не публікуйте його.
-4. Зі свого комп’ютера підключіться SSH до **клієнтського сервера** як вказаний
-   адміністративний користувач. Вставте повний скрипт у Linux Bash або запустіть
-   завантажений файл через Bash. Вручну дописувати ключі не потрібно.
-5. Скрипт створить обмежений обліковий запис `monitor`, збирач і SSH dispatcher,
-   збереже сторонні ключі, перевірить sshd та надішле HTTPS callback із host key.
-   Підтримуються Ubuntu/Debian із systemd; потрібен root або sudo.
-6. Поверніться до майстра. Worker сам перевірить SSH і фактичний збір метрик.
-   Лише після цього з’явиться READY і відкриється третій крок.
-7. Скопіюйте окремий 15-значний Telegram-код: чинний 24 години, одноразовий,
-   у БД зберігається тільки хеш.
-8. Додайте бота до групи. Від головного Telegram-адміністратора надішліть
-   `/start`, потім одним повідомленням `/bind ВАШ_15_ЗНАЧНИЙ_КОД`.
-   Команда `/bind` працює з privacy mode; голі цифри можуть бути приховані.
-9. Після підтвердження стан стане ACTIVE. Виконайте `/status` і `/report`,
-   перевірте час свіжої метрики та графіки у панелі.
+The central panel must expose **public HTTPS with a trusted certificate**, and
+`PUBLIC_BASE_URL` must point to that origin. The client needs outbound HTTPS to
+the panel; the central server needs SSH access to the client. Tunnel-only HTTP
+cannot receive the setup callback.
 
-Стани встановлення видно в списку й картці сервера. При помилці або простроченні
-у майстрі можна видати новий скрипт: старий токен анулюється, ключ зберігається,
-повторний запуск не дублює authorized_keys. Використаний токен повторно не активується.
-Callback тільки запускає перевірку: його отримання ще не доводить працездатність SSH.
+1. **Create a server record.** In the dashboard, select the add-server action.
+   Enter a name, public IPv4 address, SSH port, administrative installation login,
+   client name, collection interval, and optional systemd units. The installation
+   login is `root` or a sudo user, distinct from the background `monitor` account.
+   Leave the Telegram group ID empty if it will be filled through `/bind`.
+2. **Run the generated script on the client.** ServerWatch generates a unique
+   Ed25519 key pair and stores the private key encrypted on the central server.
+   Copy or download the complete script and execute it in Linux Bash on the
+   client using the installation login. The script contains a one-time secret
+   valid for one hour: keep it private and delete saved copies after use.
+   The installer supports Ubuntu/Debian with systemd, creates a restricted
+   `monitor` account, installs the collector/dispatcher, preserves unrelated
+   authorized keys, validates SSH configuration, and submits the public host key
+   through HTTPS. The worker must collect real metrics before the state is READY.
+3. **Bind a Telegram group.** Add the bot to the group. From the configured
+   administrator account, send `/start`, then `/bind YOUR_15_DIGIT_CODE` in one
+   message. This separate code is one-time, valid for 24 hours, and stored only
+   as an HMAC digest. Successful binding activates the server. A group may
+   contain multiple servers.
 
-Уже підключені сервери продовжують працювати зі своїми попередніми ключами,
-SSH-користувачами й `known_hosts`; переналаштовувати їх не потрібно. Для нових
-host key автоматично закріплюється в БД через одноразовий HTTPS callback.
-Зміна закріпленого ключа автоматично заборонена.
+| Command | Behavior |
+|---|---|
+| `/start` | Show connection or binding guidance |
+| `/bind CODE` | Authorize a server for the current group; administrator only |
+| `/status` | Return the latest stored server state |
+| `/report` | Return available reports and request a fresh collection/report |
+| `/help` | Show available commands |
 
-Повна інструкція, установлені файли й усі стани: [docs/onboarding.md](docs/onboarding.md).
-Група може мати кілька серверів. /status показує останній знімок; /report також
-запитує свіжу перевірку. Початковий інтервал — 180 секунд, автоматичний звіт —
-4 години. Сирі дані — 24 години, погодинні середні/максимуми — 90 днів.
+Use `/bind` when Telegram privacy mode hides ordinary numeric messages.
+`/report` can show the last snapshot before the fresh report arrives; check the
+metric timestamp. Review the server charts in the dashboard too.
 
-## 12. Необов’язковий SWAP-helper
+| Installation state | Meaning |
+|---|---|
+| `PENDING_SETUP` | Script issued; waiting for execution |
+| `INSTALLING` | Client reported installation start |
+| `VERIFYING` | Callback accepted; worker is checking SSH and metrics |
+| `READY` | SSH collection verified; Telegram binding pending |
+| `ACTIVE` | Monitoring and Telegram binding are configured |
+| `INSTALLATION_FAILED` | Installation failed or the token expired |
+| `CONNECTION_FAILED` | SSH connection or metric collection failed |
+| `DISABLED` | Administrator disabled monitoring |
 
-Для нових серверів виберіть опцію SWAP на першому кроці майстра: скрипт сам
-встановить helper і sudo-правило для `monitor` лише на його запуск без аргументів.
-Загальний sudo не надається; сам SWAP під час встановлення не створюється.
-Наведені нижче ручні команди призначені **тільки для раніше підключених серверів**.
+Reissuing a script invalidates the previous token while preserving the server's
+key pair. A consumed token cannot be reused. Existing clients retain their
+previous monitoring users, keys, groups, and verified `known_hosts` entries;
+they do not need to rerun the new installer. New clients pin host keys in the
+database. A changed host key is never accepted automatically.
 
-Моніторинг не потребує sudo. Якщо потрібна кнопка SWAP для старого підключення, передайте
-scripts/serverwatch-swap та deploy/serverwatch-swap.sudoers через власний
-адміністративний SSH на **клієнтський сервер**. У каталозі переданих файлів
-установіть helper і перевірте sudoers; сам helper для smoke test не запускайте.
+See [docs/onboarding.md](docs/onboarding.md) for installed paths, retry behavior,
+and detailed client prerequisites.
+
+## 12. Optional swap helper
+
+For new clients, enable the swap option in the onboarding wizard. The installer
+sets up the helper and a narrow sudo rule for `monitor`; installation itself does
+not create swap.
+
+The following manual steps are **only for legacy clients**. Transfer
+`scripts/serverwatch-swap` and `deploy/serverwatch-swap.sudoers` through your
+administrative SSH connection, then run these commands on the **client server**
+from the transfer directory. Adjust the sudoers username if the monitoring login
+is not `serverwatch`. Do not execute the helper as a smoke test.
 
 ```bash
 sudo install -o root -g root -m 0755 serverwatch-swap /usr/local/sbin/serverwatch-swap
@@ -732,21 +830,24 @@ sudo visudo -c
 sudo -l -U serverwatch
 ```
 
-Дозволено лише /usr/local/sbin/serverwatch-swap **без аргументів**, не ALL/shell/Python.
-Якщо SSH-логін інший, змініть sudoers перед встановленням. Кнопки доступні тільки
-числовому TELEGRAM_ADMIN_ID. «Займаюсь цим» записує адміністратора і час.
-SWAP-кнопка створює окреме завдання: helper перевіряє диск, поточний SWAP і flock,
-додає один файл 1 GiB та підтверджує /proc/swaps. Старий SWAP не змінюється.
+Only the numeric `TELEGRAM_ADMIN_ID` can acknowledge incidents or request
+swap actions. Acknowledgment records the administrator and timestamp; the swap
+button queues a separate job.
 
-Додатковий SWAP діє **до reboot клієнта**, /etc/fstab не редагується. Наявний
-неактивний файл не перезаписується; після збою потрібна ручна перевірка.
-Не натискайте реальну кнопку тільки для перевірки: це змінює клієнтський сервер.
+The helper checks free disk space, existing swap, and its lock, then creates a
+single additional 1 GiB file and verifies `/proc/swaps`. It preserves existing
+swap, refuses to overwrite a leftover inactive file, and does not edit
+`/etc/fstab`. **The extra swap lasts only until the client reboots.** Interrupted
+operations require manual inspection and are not automatically repeated.
 
+## 13. Acceptance checks
 
-## 13. Перевірка працездатності та автозапуску
+Verify service activity, automatic startup, Nginx syntax, listeners, and database
+connectivity. An active monitor process alone does not prove successful SSH
+collection; you must onboard a client and check fresh metrics.
 
-Перевірте active/enabled усіх компонентів, конфігурацію Nginx, listeners та БД.
-Саме active ще не доводить успішний SSH-збір; потрібен доданий сервер.
+For public-IP HTTPS, set `DOMAIN` to that public IP before the checks below; the
+variable is used only to construct the HTTPS test URL.
 
 ```bash
 sudo systemctl is-active mysql nginx serverwatch-web serverwatch-bot serverwatch-monitor
@@ -759,34 +860,36 @@ if test "$ACCESS_MODE" = 'tunnel'; then curl -I http://127.0.0.1:8080/login; fi
 if test "$ACCESS_MODE" = 'https'; then curl -I "https://$DOMAIN/login"; fi
 ```
 
-| Перевірка | Дія та очікування |
-|---|---|
-| Панель/TOTP | У браузері /login → пароль → TOTP; без коду dashboard закритий |
-| Додавання сервера | Майстер → скрипт на клієнті → фактичні метрики → одноразовий Telegram-код |
-| Метрики в MySQL | /report у Telegram, потім повторити manage.py status: новий last_success_at і час останньої метрики |
-| Графіки | Сторінка сервера, вибір 24 год / 7 / 30 днів; старої історії на новому VPS ще немає |
-| Telegram | /bind КОД від головного ID → успіх; /status повертає стан |
-| Доставка | /report → свіжий звіт; status показує sent>0, queued не зростає постійно |
-| Аварії | Тимчасово понизити один поріг у панелі, дочекатися перевірки, повернути поріг |
-| «Займаюсь цим» | Головний ID → успіх, сторонній → відмова; status показує audit action |
-| SWAP | Mock-тести перевіряють логіку; реальна кнопка змінює клієнта й натискається лише за потреби |
+### Interactive acceptance checklist
 
-Браузер і кнопки Telegram перевіряються інтерактивно: systemctl не підтверджує
-TOTP або права кнопок. Не виснажуйте RAM/диск для тесту. SQL нижче показує лише
-статуси й часові позначки без приватних ключів.
+| Check | Expected result |
+|---|---|
+| Password and TOTP | Login requires both factors; logout and a new login work |
+| Onboarding | Client script completes, SSH metrics are verified, then Telegram binding succeeds |
+| Fresh metrics | `/report` advances `last_success_at` and the latest sample timestamp |
+| Charts | Server detail charts support 24-hour, 7-day, and 30-day views; history fills over time |
+| Telegram delivery | Reports reach the bound group; the pending outbox does not grow indefinitely |
+| Alerts | Temporarily lower a threshold, observe the alert, then restore the threshold |
+| Administrator actions | Authorized acknowledgment succeeds; another user is refused; audit action is recorded |
+| Swap | Validate logic with mocks; use the real button only when the client actually needs swap |
+
+Do not exhaust RAM or disk to test alerts. Browser and Telegram interactions
+must be checked directly; `systemctl` cannot verify them.
+
+Check the database timestamps and recent monitor/bot journals after an
+on-demand report. These queries show status information rather than secrets.
 
 ```bash
 sudo mysql --execute "SELECT id,status,last_success_at FROM serverwatch.servers; SELECT server_id,MAX(collected_at) AS last_sample,COUNT(*) AS samples FROM serverwatch.server_metrics GROUP BY server_id; SELECT status,COUNT(*) FROM serverwatch.alerts GROUP BY status;"
 sudo journalctl -u serverwatch-monitor -u serverwatch-bot --since '-10 min' --no-pager
 ```
 
-## 14. Автоматичний backup
+## 14. Automated backups
 
-Root backup підключається до MySQL через Unix socket, без пароля в CLI.
-Скрипт має set -euo pipefail, flock, приватний тимчасовий файл і gzip --test:
-невдалий mysqldump не стане фінальним архівом. --single-transaction забезпечує
-узгоджений знімок InnoDB, але міграції одночасно з backup не запускайте.
-Встановлена root-owned копія відокремлена від робочого репозиторію.
+The backup script uses `mysqldump --single-transaction`, `pipefail`, a lock,
+private temporary files, and gzip validation before publishing the final archive.
+It assumes Ubuntu's root socket authentication. Do not run DDL migrations during
+a backup. Install the root-owned copy outside the application checkout.
 
 ```bash
 sudo install -d -o root -g root -m 0700 /var/backups/serverwatch
@@ -801,25 +904,22 @@ sudo systemctl enable --now serverwatch-backup.timer
 sudo systemctl list-timers serverwatch-backup.timer --all
 ```
 
-Timer виконує backup близько 03:15 UTC з затримкою до 5 хвилин, Persistent
-компенсує пропущений запуск. Архіви не видаляються автоматично. Переносьте їх
-у власне захищене зовнішнє сховище, перевіряйте відновлення та очищуйте зайві
-локальні копії після перевірки зовнішніх. Той самий SSD не захищає від втрати VPS.
-
-Оберіть створений дамп і перевірте gzip; timestamp — ваш параметр.
+The timer runs around 03:15 UTC with up to five minutes of randomized delay
+and catches up missed runs. Archives are not deleted automatically. Copy verified
+backups to protected off-host storage, test restoration, and manage retention.
+Choose a real archive and verify its gzip integrity.
 
 ```bash
 export BACKUP='/var/backups/serverwatch/serverwatch-YOUR_TIMESTAMP.sql.gz'
 sudo gzip --test "$BACKUP"
 ```
 
-### Окрема копія environment і ключа шифрування
+### Back up configuration and encryption keys separately
 
-**Без початкового ENCRYPTION_KEY неможливо розшифрувати SSH-ключі й TOTP з дампу.**
-Не генеруйте нового ключа при відновленні. Збережіть environment, migration.env
-та known_hosts окремо від SQL. Root-only archive шифрується GPG перед перенесенням.
-Парольну фразу GPG введіть інтерактивно й зберігайте окремо; не використовуйте
---passphrase у команді. Каталог не повинен бути під nginx/static.
+The SQL dump cannot decrypt credentials without the original `ENCRYPTION_KEY`.
+Archive the environment, migration credentials, and known-host records separately,
+then encrypt the archive before off-host transfer. Enter the GPG passphrase
+interactively and store it separately. Keep these files outside web-served paths.
 
 ```bash
 sudo install -d -o root -g root -m 0700 /var/backups/serverwatch-secrets
@@ -828,25 +928,24 @@ sudo gpg --symmetric --cipher-algo AES256 --output /var/backups/serverwatch-secr
 sudo stat -c '%U:%G %a %n' /var/backups/serverwatch-secrets/config.tar.gz.gpg
 ```
 
-Перенесіть назовні тільки .gpg. Після перевірки зашифрованої копії видаліть
-тимчасовий відкритий archive цією точною командою; робочий environment залишається.
+Transfer only the encrypted `.gpg` file. After checking that the encrypted
+backup is usable, remove the temporary plaintext archive.
 
 ```bash
 sudo rm -- /var/backups/serverwatch-secrets/config.tar.gz
 ```
 
-### Перевірка після reboot
+### Verify recovery after a host reboot
 
-Після налаштування й backup перевірте reboot. Команда перерве SSH: спочатку
-переконайтеся в доступності консолі провайдера. Після завантаження повторно
-підключіться до VPS; локальний SSH-тунель теж потрібно відкрити заново.
+Confirm that the provider console is available, then reboot. This disconnects
+SSH; reconnect afterwards and reopen any local tunnel.
 
 ```bash
 sudo reboot
 ```
 
-Після повторного входу перевірте автозапуск і нові дані. Не запускайте worker
-вручну поряд зі службою для «відновлення».
+Verify automatic startup and fresh metrics after reconnecting. Do not start a
+second worker manually to recover monitoring.
 
 ```bash
 sudo systemctl is-active mysql nginx serverwatch-web serverwatch-bot serverwatch-monitor
@@ -855,21 +954,24 @@ sudo -u serverwatch /opt/serverwatch/.venv/bin/python /opt/serverwatch/scripts/m
 sudo journalctl -b -u serverwatch-web -u serverwatch-bot -u serverwatch-monitor -n 100 --no-pager
 ```
 
-## 15. Відновлення
+## 15. Recovery
 
-На новому VPS виконайте пакети, користувача, **сумісну версію коду**, venv і
-loopback MySQL із розділів 2–5. Не запускайте setup_environment.py: потрібні
-оригінальні секрети. На наявному VPS перед імпортом створіть backup поточного
-стану та зупиніть служби. На новій машині невстановлені служби зупиняти не потрібно.
+On a replacement VPS, prepare packages, the service account, a compatible code
+revision, the virtual environment, and loopback MySQL using sections 2–5.
+**Do not run `setup_environment.py`: recovery requires the original secrets.**
+
+On an existing host, first back up its current state and stop the services. On a
+fresh host where the units are not installed yet, skip these stop commands.
 
 ```bash
 sudo systemctl stop serverwatch-backup.timer serverwatch-backup.service
 sudo systemctl stop serverwatch-web serverwatch-bot serverwatch-monitor
 ```
 
-Завантажте свій .gpg у root-only каталог із розділу 14. Розшифруйте, перегляньте
-**лише список імен**; archive має містити тільки serverwatch.env, migration.env,
-known_hosts без сторонніх шляхів. Не розпаковуйте недовірені tar-файли.
+Place your encrypted configuration backup in the root-only backup directory.
+Decrypt it and inspect the archive listing **before running the extraction**.
+It must contain only `serverwatch.env`, `migration.env`, and `known_hosts`, with
+no unexpected paths. Extract only a trusted archive, then restore permissions.
 
 ```bash
 sudo bash -c 'umask 077; gpg --output /var/backups/serverwatch-secrets/config.restore.tar.gz --decrypt /var/backups/serverwatch-secrets/config.tar.gz.gpg'
@@ -882,18 +984,18 @@ sudo chmod 0600 /etc/serverwatch/migration.env
 sudo rm -- /var/backups/serverwatch-secrets/config.restore.tar.gz
 ```
 
-Дамп таблиць **не містить MySQL-ролей**. Тільки на новому VPS відновіть їх
-зі старими паролями з URI командою нижче. Скрипт передає паролі SQL-параметрами,
-не друкує їх і відмовляється змінювати вже наявні ролі. На старому VPS із чинними
-ролями цей крок пропустіть.
+Database dumps do not include MySQL accounts. On a **new host only**, restore
+the database accounts using the original passwords from the saved URIs. This
+helper uses bound SQL parameters and refuses to modify existing accounts.
+Skip it on a host where those accounts already exist.
 
 ```bash
 sudo /opt/serverwatch/.venv/bin/python /opt/serverwatch/scripts/restore_database_users.py
 ```
 
-Виберіть власний SQL-дамп, перевірте gzip й імпортуйте з pipefail. Імпорт замінює
-дані однойменних таблиць: перевірте шлях. Ревізія схеми має відповідати коду;
-старий дамп спочатку відновлюйте на сумісну версію, потім застосовуйте upgrade.
+Select and verify your SQL dump before import. Import replaces data in
+matching tables. Restore an older dump against compatible application code first,
+then apply upgrades. The pipeline uses `pipefail` to surface decompression errors.
 
 ```bash
 export BACKUP='/var/backups/serverwatch/serverwatch-YOUR_TIMESTAMP.sql.gz'
@@ -904,9 +1006,10 @@ sudo -u serverwatch /opt/serverwatch/.venv/bin/python /opt/serverwatch/scripts/m
 sudo /opt/serverwatch/.venv/bin/python /opt/serverwatch/scripts/manage.py upgrade
 ```
 
-На новому VPS встановіть unit/Nginx/backup файли за розділами 8–10 та 14. Потім
-запустіть служби й повторіть checklist розділу 13. Для зміненого IP перевірте
-DNS, UFW, клієнтські from= і known_hosts.
+On a new host, install the systemd, Nginx, and backup files from sections
+8–10 and 14 before starting services. Repeat section 13 afterwards. If the VPS
+address changed, review DNS, firewalls, legacy SSH `from=` restrictions, and
+host-key trust records.
 
 ```bash
 sudo systemctl daemon-reload
@@ -916,15 +1019,19 @@ sudo -u serverwatch /opt/serverwatch/.venv/bin/python /opt/serverwatch/scripts/m
 sudo journalctl -u serverwatch-monitor -n 100 --no-pager
 ```
 
-Перервана SSH-перевірка відновиться після lease до 10 хвилин. Перерваний SWAP
-автоматично не повторюється: перевірте клієнтський стан вручну.
+An interrupted monitoring check can resume after its lease expires, up to
+10 minutes later. Interrupted swap operations are not automatically retried;
+inspect the client's actual state before taking further action.
 
-## 16. Оновлення та відновлення TOTP
+## 16. Upgrades and TOTP recovery
 
-Спочатку перевірте новий код на staging, створіть backup БД та секретів.
-Зупиніть timer і процеси перед DDL. pull --ff-only не має знищувати локальні зміни.
-При змінах deploy перевстановіть відповідні файли, перевірте nginx/unit-файли
-й daemon-reload; наведений блок сам по собі встановлені конфігурації не копіює.
+Validate the new revision in staging and back up both the database and secrets.
+Stop the timer and application processes before schema changes. The sequence
+below preserves local work through `git pull --ff-only`.
+
+If tracked deployment files changed, reinstall the affected systemd/Nginx files
+and validate them before restarting. `daemon-reload` alone does not copy updates
+from the repository.
 
 ```bash
 sudo systemctl start serverwatch-backup.service
@@ -940,17 +1047,14 @@ sudo systemctl start serverwatch-backup.timer
 sudo -u serverwatch /opt/serverwatch/.venv/bin/python /opt/serverwatch/scripts/manage.py status
 ```
 
-Міграція `4e2c9d8f610a` додає поля ключів і встановлення, зберігає попередні
-SSH-ключі, Telegram-групи та історію. Перед першим використанням нового майстра
-додайте `PUBLIC_BASE_URL=https://ВАША_IP_АБО_ДОМЕН` через `sudoedit /etc/serverwatch/serverwatch.env` та перезапустіть web, bot і monitor.
-На вашому VPS це `PUBLIC_BASE_URL=https://92.5.162.96`. `setup_environment.py`
-повторно не запускайте. Нове встановлення запропонує адресу під час початкового
-створення environment. Без адреси наявні сервери працюватимуть, але створення
-нових через майстер покаже пояснення.
+The onboarding migration preserves existing SSH keys, Telegram groups, and
+history. Before using the wizard on an upgraded installation, set
+`PUBLIC_BASE_URL=https://YOUR_PUBLIC_IP_OR_DOMAIN` in the runtime environment and
+restart web, bot, and monitor. Do not rerun the environment generator.
 
-Не міняйте ENCRYPTION_KEY: ротація потребує окремого перешифрування. При втраті
-Google Authenticator з довіреного shell скиньте TOTP тільки власного логіна;
-після пароля знову з’явиться QR. Це відновлення доступу, не звичайний спосіб входу.
+Do not replace `ENCRYPTION_KEY`; rotation requires re-encrypting existing data.
+If you lose your authenticator, use a trusted administrator shell to reset TOTP
+for your own web account. The next password login will offer enrollment again.
 
 ```bash
 sudo -u serverwatch /opt/serverwatch/.venv/bin/python /opt/serverwatch/scripts/manage.py reset-totp --username YOUR_ADMIN_LOGIN
@@ -958,38 +1062,42 @@ sudo -u serverwatch /opt/serverwatch/.venv/bin/python /opt/serverwatch/scripts/m
 
 ## 17. Troubleshooting
 
-У відносних командах нижче каталог — /opt/serverwatch. Не публікуйте environment.
-Не виправляйте проблеми через chmod 777, root-runtime, sudo pip або відкриття 3306.
+Run relative commands from `/opt/serverwatch`. Inspect journals without
+publishing environment files, private keys, tokens, or database dumps.
 
-| Помилка | Ймовірна причина | Команда діагностики | Виправлення |
-|---|---|---|---|
-| MySQL не запускається | cnf, нестача RAM/диска | `sudo journalctl -u mysql -n 100 --no-pager`; `sudo mysqld --validate-config`; `df -h`; `free -h` | Виправити cnf/ресурси, restart mysql |
-| Access denied for user | Пароль, host або роль | `sudo mysql --execute "SELECT user,host FROM mysql.user WHERE user LIKE 'serverwatch%';"`; `sudo -u serverwatch .venv/bin/python scripts/manage.py check-db` | Узгодити пароль/URI/роль 127.0.0.1, не використовувати root runtime |
-| Unknown database | Не застосовано bootstrap або помилковий URI | `sudo mysql --execute "SHOW DATABASES LIKE 'serverwatch';"` | Перше встановлення: імпорт bootstrap; відновлення: розділ 15 |
-| SQLAlchemy не підключається | MySQL вимкнений, URI/driver | `sudo systemctl is-active mysql`; `.venv/bin/python -m pip check`; `sudo -u serverwatch .venv/bin/python scripts/manage.py check-db` | mysql+pymysql, правильні credentials і loopback |
-| Flask не запускається | Секрети, Fernet, схема | `sudo journalctl -u serverwatch-web -n 100 --no-pager`; `sudo stat /etc/serverwatch/serverwatch.env` | Відновити environment, upgrade; не генерувати новий ключ для чинної БД |
-| ModuleNotFoundError | Інший Python або venv | `.venv/bin/python -m pip check`; `sudo systemctl cat serverwatch-web` | Встановити requirements у фактичний venv, перевірити WorkingDirectory |
-| Gunicorn не знаходить application | Невірний модуль/каталог | `ls -l /opt/serverwatch/run.py`; `sudo systemctl cat serverwatch-web` | Точка run:app, WorkingDirectory=/opt/serverwatch |
-| Nginx 502 | Web/socket/права | `sudo systemctl status serverwatch-web`; `sudo namei -l /run/serverwatch/web.sock`; `sudo -u www-data curl --unix-socket /run/serverwatch/web.sock -I http://localhost/login` | Відновити unit, Group=www-data та web, без chmod 777 |
-| Nginx invalid map / unknown zone | Не встановлена global zone | `sudo nginx -t`; `sudo nginx -T` | nginx-limits.conf у conf.d, proxy snippet у snippets |
-| Permission denied | Права env/known_hosts/instance | `sudo namei -l /etc/serverwatch/known_hosts`; `sudo -u serverwatch test -r /etc/serverwatch/serverwatch.env` | root:serverwatch 0640, dir 0750, instance serverwatch 0700 |
-| Бот не відповідає | Token/ID, інший polling/webhook/privacy | `sudo journalctl -u serverwatch-bot -n 100 --no-pager`; `/help` у Telegram | Прибрати інший процес/webhook, звірити токен/ID, використовувати /bind |
-| Черга Telegram росте | Немає бота/прав або не той Group ID | `sudo -u serverwatch .venv/bin/python scripts/manage.py status`; journal bot | Відновити членство, права та прив’язку; повтори автоматичні |
-| SSH connection timeout | IP/порт/мережа/client firewall | journal monitor; `ssh-keyscan -T 5 -p CLIENT_PORT CLIENT_IP` | Перевірити SSH listener і доступ із центрального IP |
-| SSH authentication failed | Ключ/логін/from=/права | На клієнті `sudo journalctl -u ssh -n 100 --no-pager`; `sudo namei -l /home/serverwatch/.ssh/authorized_keys` | Виправити pubkey/права/from=, замінити ключ через панель |
-| Host key unknown/changed (старі підключення) | Немає перевіреного known_hosts | `sudo -u serverwatch ssh-keygen -F CLIENT_IP -f /etc/serverwatch/known_hosts` | Незалежно звірити fingerprint, тільки тоді змінювати запис |
-| Monitor не пише метрики | Немає активних серверів, SSH/Python3/lease | `sudo -u serverwatch .venv/bin/python scripts/manage.py status`; journal monitor; на клієнті `python3 --version` | Перевірити is_active, SSH, Python3, інтервал; lease до 10 хв |
-| Міграція падає | Runtime замість DDL, часткова схема | `sudo mysql --execute "SHOW TABLES FROM serverwatch; SELECT version_num FROM serverwatch.alembic_version;"` | upgrade через root helper; розібрати частковий DDL після backup, не stamp навмання |
-| TOTP відхиляється | Час/повтор коду/секрет | `timedatectl status`, новий код | NTP, новий часовий крок; за втрати reset-totp, не заміна Fernet |
-| Знову login після входу | Secure cookie на HTTP тунелю | sudoedit environment, перевірити гілку Nginx | false для loopback tunnel, true для HTTPS; restart web, новий сеанс |
-| SWAP відхилено | Helper/sudo/диск/наявний файл | На клієнті `sudo -l -U serverwatch`; `df -h /var/lib`; `cat /proc/swaps` | Розділ 12; не видаляти/перезаписувати старий SWAP |
-| Backup failed | Root socket auth/диск | `sudo journalctl -u serverwatch-backup.service -n 100 --no-pager`; `sudo mysql --execute 'SELECT 1'`; `df -h /var/backups` | Відновити socket auth або окремо налаштувати backup-роль; місце; повторити service |
+| Symptom | Inspect | Resolution |
+|---|---|---|
+| MySQL fails to start | `journalctl -u mysql`, `mysqld --validate-config`, disk and RAM | Correct configuration or capacity, then restart |
+| Database access denied | Database account host/grants and `scripts/manage.py check-db` | Match the runtime URI, password, and `127.0.0.1` account |
+| Unknown database | Bootstrap status and database name | Use the initial bootstrap or recovery procedure as appropriate |
+| Flask fails at startup | `journalctl -u serverwatch-web`, environment permissions, schema revision | Restore configuration and apply migrations; preserve the original Fernet key |
+| Missing Python module | `.venv/bin/python -m pip check`, unit `WorkingDirectory` / `ExecStart` | Install requirements in the interpreter actually used by the service |
+| Gunicorn cannot import the app | `run.py`, unit working directory | Use `run:app` from `/opt/serverwatch` |
+| Nginx returns 502 | Web service, socket ownership, `namei -l /run/serverwatch/web.sock` | Restore the unit's socket group and service permissions |
+| Nginx reports an invalid map or zone | `nginx -t`, `nginx -T` | Install the limits file in `conf.d` and the proxy file in `snippets` |
+| Permission denied | `namei -l` for environment, known-hosts, or instance paths | Restore documented ownership and modes; keep `instance` private |
+| Bot does not respond | Bot journal, token, numeric admin ID, polling/webhook conflicts | Run one polling process with valid credentials and no competing webhook |
+| Telegram queue keeps growing | `scripts/manage.py status`, bot journal, group membership | Restore bot permissions and the correct group binding; retries are automatic |
+| SSH times out | Client SSH port, provider/client firewalls, monitor journal | Restore reachability from the central server |
+| SSH authentication fails | Client SSH journal, authorized-key permissions, legacy `from=` restriction | Correct the login, key, or allowed source address |
+| Host key rejected | Pinned identity or verified legacy `known_hosts` entry | Verify identity through an independent console before restoring trust |
+| No fresh metrics | Active flag, installation state, client Python 3, SSH, leases | Resolve client access and allow up to 10 minutes for an interrupted lease |
+| Migration fails | Migration credentials, `alembic_version`, actual tables | Back up and investigate partial DDL; use the upgrade helper rather than guessing with `stamp` |
+| TOTP rejected | Host time synchronization and a fresh code | Enable NTP; use the documented account reset only for lost access |
+| Login loops through an SSH tunnel | Cookie settings and chosen Nginx branch | Use `SESSION_COOKIE_SECURE=false` only for loopback tunnel HTTP, restart web, then log in again |
+| Swap rejected | Client sudoers, free disk, `/proc/swaps`, existing helper file | Review section 12 and inspect leftovers; do not overwrite existing swap |
+| Backup fails | Backup journal, root socket authentication, free space | Restore database access/capacity and rerun the backup service |
 
-## 18. Тести й межі перевірки
+Do not resolve access problems by using `chmod 777`, running application services
+as root, opening MySQL publicly, disabling host-key checks, or enabling debug
+logging with production secrets.
 
-На локальній/staging-машині встановіть dev-залежності та виконайте перевірки.
-Для тестів використовується SQLite та mock SSH; реальний SWAP не створюється.
-Встановлювати dev-пакети на production VPS із 1 GB RAM не потрібно.
+## 18. Development and validation
+
+Install development dependencies on a local or staging machine. The suite uses
+SQLite, mock SSH, and mock HTTPS; it does not create real swap or run the root
+client installer. Development packages need not be installed on a small
+production VPS.
 
 ```bash
 python3 -m venv .venv
@@ -1000,7 +1108,21 @@ python3 -m venv .venv
 .venv/bin/python -m pip check
 ```
 
-Захист і межі доступу: [SECURITY.md](SECURITY.md). Деталі аудиту й фактичних
-перевірок: [docs/deployment-audit.md](docs/deployment-audit.md). Python-тести,
-перевірка структури команд і компіляція SQL не доводять роботу Nginx, systemd,
-UFW, Telegram або MySQL на VPS. Виконайте checklist розділу 13.
+On Windows, use `.venv\Scripts\python.exe` in place of `.venv/bin/python`;
+production services and the client installer still require Linux.
+
+Checks cover authentication, SSH key handling, installation lifecycle, service
+events, reporting, retention, migrations, delivery, and deployment configuration.
+Bash parsing and unit-file comparisons are static checks. They cannot validate
+real certificate issuance, Telegram delivery, Linux permissions, or production
+MySQL behavior. Use section 13 for acceptance testing on the target environment.
+
+When contributing, keep changes focused, update documentation for behavior or
+configuration changes, and review generated migrations before committing them.
+Use synthetic credentials and mocked remote services in tests.
+
+## License
+
+ServerWatch is licensed under the [Apache License 2.0](LICENSE).
+Third-party assets retain their respective notices, including the bundled
+[Chart.js license](app/static/vendor/Chart.js.LICENSE.md).
