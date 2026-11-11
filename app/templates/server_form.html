@@ -75,17 +75,109 @@
     {% if server %}
       <h2>Пороги сповіщень, %</h2>
       <div class="form-grid">
-        {% for key,label in [('cpu_warning','CPU — попередження'),('ram_warning','RAM — попередження'),('ram_critical','RAM — критично'),('disk_warning','Диск — попередження'),('disk_critical','Диск — критично'),('swap_warning','SWAP — попередження')] %}
+        {% for key,label in [('cpu_warning','CPU — попередження'),('cpu_critical','CPU — критично'),('ram_warning','RAM — попередження'),('ram_critical','RAM — критично'),('disk_warning','Диск — попередження'),('disk_critical','Диск — критично'),('swap_warning','SWAP — попередження')] %}
           <label>
             {{ label }}<input name="{{ key }}"
                               type="number"
-                              value="{{ server.thresholds[key] }}"
+                              value="{{ server.thresholds.get(key, [95, server.thresholds.cpu_warning]|max) }}"
                               min="1"
                               max="100"
                               required>
           </label>
         {% endfor %}
       </div>
+      <h2>Звіти в Telegram</h2>
+      <div class="form-grid">
+        <label>
+          Режим
+          <select name="report_mode">
+            {% for value, label in [('interval', 'Загальний інтервал'), ('schedule', 'Індивідуальний графік'), ('disabled', 'Вимкнено')] %}
+              <option value="{{ value }}"
+                      {% if (schedule.mode if schedule else 'interval') == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          Часовий пояс IANA
+          <input name="report_timezone"
+                 maxlength="64"
+                 value="{{ schedule.timezone if schedule else 'UTC' }}"
+                 placeholder="Europe/Kyiv">
+        </label>
+        <label>
+          Час надсилання
+          <input name="report_times"
+                 value="{{ schedule.times|join(', ') if schedule else '' }}"
+                 placeholder="09:00, 15:00, 21:00">
+        </label>
+      </div>
+      <fieldset>
+        <legend>Дні тижня для індивідуального графіка</legend>
+        {% for day in ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Нд'] %}
+          <label class="check">
+            <input type="checkbox"
+                   name="report_weekdays"
+                   value="{{ loop.index0 }}"
+                   {% if not schedule or loop.index0 in schedule.weekdays %}checked{% endif %}>{{ day }}
+          </label>
+        {% endfor %}
+      </fieldset>
+      {% if schedule and schedule.next_at %}
+        <p class="muted small">Наступний звіт {{ schedule.next_at.strftime("%d.%m.%Y %H:%M") }} UTC</p>
+      {% endif %}
+      <h2>Автоматизація</h2>
+      <input type="hidden" name="automation_switches_present" value="1">
+      <label class="check">
+        <input type="checkbox"
+               name="automation_enabled"
+               {% if server.automation_enabled %}checked{% endif %}>
+        Дозволити автоматичні дії для цього VPS
+      </label>
+      <label class="check">
+        <input type="checkbox"
+               name="service_monitoring_enabled"
+               {% if server.service_monitoring_enabled %}checked{% endif %}>
+        Автоматично виявляти й перевіряти сервіси
+      </label>
+      <input type="hidden" name="backup_present" value="1">
+      <label class="check">
+        <input type="checkbox"
+               name="backup_enabled"
+               {% if backup and backup.enabled %}checked{% endif %}>
+        Щоденний бекап баз даних
+      </label>
+      <input type="hidden" name="swap_automation_present" value="1">
+      <label class="check">
+        <input type="checkbox"
+               name="swap_permission"
+               {% if server.swap_enabled %}checked{% endif %}>
+        Дозволити операції з постійним Swap
+      </label>
+      <p class="muted small">Постійний Swap потребує відповідного helper і sudo-правила на VPS.</p>
+      <label class="check">
+        <input type="checkbox"
+               name="swap_initial"
+               {% if swap_policy and swap_policy.initial_enabled %}checked{% endif %}>
+        Створювати постійний Swap під час початкової перевірки
+      </label>
+      <label class="check">
+        <input type="checkbox"
+               name="swap_critical"
+               {% if swap_policy and swap_policy.critical_enabled %}checked{% endif %}>
+        Реагувати на критичний RAM через 10 хвилин
+      </label>
+      <input type="hidden" name="cpu_recovery_present" value="1">
+      <label class="check">
+        <input type="checkbox"
+               name="cpu_recovery"
+               {% if recovery and recovery.enabled %}checked{% endif %}>
+        Automatic CPU Recovery
+      </label>
+      {% if recovery and recovery.verify_until %}
+        <p class="muted small">Очікується відновлення SSH після перезавантаження.</p>
+      {% elif recovery and recovery.due_at %}
+        <p class="muted small">Триває перевірка критичного навантаження CPU.</p>
+      {% endif %}
       <label class="check">
       <input type="checkbox"
              name="is_active"

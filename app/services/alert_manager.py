@@ -4,21 +4,25 @@ from html import escape
 from app.extensions import db
 from app.models import Alert, Outbox, Setting, utcnow
 
+from .report_generator import size
+
 
 def setting(key, default):
     item = db.session.get(Setting, key)
     return item.value if item else default
 
 
-def enqueue(server, message, alert=None):
+def enqueue(server, message, alert=None, *, edit_message_id=None):
     if server.is_authorized and server.telegram_group_id:
-        db.session.add(
-            Outbox(
-                group_id=server.telegram_group_id,
-                message=message,
-                alert_id=alert.id if alert else None,
-            )
+        item = Outbox(
+            group_id=server.telegram_group_id,
+            message=message,
+            alert_id=alert.id if alert else None,
+            edit_message_id=edit_message_id,
         )
+        db.session.add(item)
+        return item
+    return None
 
 
 def update_alert(server, kind, severity, message):
@@ -71,6 +75,13 @@ def evaluate(server, metric):
             f"<b>{label}</b>\n\nСервер: {escape(server.name)}\n\n{summary}\n\n"
             f"{kind.upper()}: перевищено поріг. Потрібна увага адміністратора.\n@Yureweo"
         )
+        if kind == "ram" and severity == "critical":
+            load = " / ".join(f"{value:.2f}" for value in metric.details.get("load_average", []))
+            message += (
+                f"\nRAM: {size(metric.ram_used)} / {size(metric.ram_total)}"
+                f"\nSWAP: {size(metric.swap_used)} / {size(metric.swap_total)}"
+                f"\nНавантаження: {load or 'невідомо'}\nВиявлено: {utcnow():%Y-%m-%d %H:%M} UTC"
+            )
         update_alert(server, kind, severity, message)
     for name, state in metric.details.get("services", {}).items():
         if state not in ("active", "unknown"):

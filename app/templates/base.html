@@ -30,7 +30,7 @@
              {% if request.path == '/settings' %}aria-current="page"{% endif %}>⚙ <span>Налаштування</span>
           </a>
           <a href="{{ url_for('settings.security') }}"
-             {% if request.path == '/security' %}aria-current="page"{% endif %}>◇ <span>Безпека та журнал</span>
+             {% if request.path in ('/security', '/activity') %}aria-current="page"{% endif %}>◇ <span>Журнал дій</span>
           </a>
         </nav>
         <div class="sidebar-bottom">
@@ -58,9 +58,20 @@
         </div>
       </header>
       <main>
-        {% for category, message in get_flashed_messages(with_categories=true) %}
-          <div class="notice {{ category }}" role="status">{{ message }}</div>
-        {% endfor %}
+        {% set flashes = get_flashed_messages(with_categories=true) %}
+        {% if flashes %}
+          <div class="flash-stack">
+            {% for category, message in flashes %}
+              <div class="notice {{ category }}"
+                   role="{{ 'alert' if category == 'error' else 'status' }}">
+                <span>{{ message }}</span>
+                <button class="quiet flash-dismiss"
+                        type="button"
+                        aria-label="Закрити повідомлення">×</button>
+              </div>
+            {% endfor %}
+          </div>
+        {% endif %}
         {% block content %}{% endblock %}
       </main>
       <footer>

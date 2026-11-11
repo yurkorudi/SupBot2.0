@@ -62,8 +62,20 @@
     </div>
     <label class="check"><input name="enable_swap"
                                 type="checkbox"
-                                {% if request.form.get('enable_swap') %}checked{% endif %}>Дозволити адміністратору кнопку SWAP +1 GB</label>
-    <p class="small muted">Опція встановлює лише обмежений helper і sudo-правило. Сам SWAP зараз не створюється.</p>
+                                {% if request.form.get('enable_swap') %}checked{% endif %}>Дозволити постійний Swap від 2 GiB</label>
+    <p class="small muted">Майстер встановить обмежений helper. Початкова перевірка створить Swap за потреби, якщо автоматичні дії ввімкнено.</p>
+    <label class="check">
+      <input type="checkbox"
+             name="enable_database_backups"
+             {% if request.form.get('enable_database_backups') %}checked{% endif %}>
+      Дозволити щоденний бекап локальних баз даних VPS
+    </label>
+    <label class="check">
+      <input type="checkbox"
+             name="enable_cpu_recovery"
+             {% if request.form.get('enable_cpu_recovery') %}checked{% endif %}>
+      Дозволити перезавантаження VPS для відновлення CPU
+    </label>
     <div class="form-actions">
       <button>Створити сервер →</button><a href="{{ url_for('servers.index') }}">Скасувати</a>
     </div>

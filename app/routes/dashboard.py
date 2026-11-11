@@ -5,7 +5,7 @@ from flask_login import login_required
 from sqlalchemy import func
 
 from app.extensions import db
-from app.models import Alert, HourlyMetric, Server, ServerMetric, utcnow
+from app.models import AdminAction, Alert, HourlyMetric, Server, ServerMetric, utcnow
 
 bp = Blueprint("dashboard", __name__)
 
@@ -27,23 +27,62 @@ def index():
             db.select(Server.status, func.count(Server.id)).group_by(Server.status)
         ).all()
     )
-    latest = latest_query().subquery()
+    current_metrics = (
+        latest_query()
+        .join(Server, Server.id == ServerMetric.server_id)
+        .where(Server.is_active.is_(True), Server.status.in_(("online", "warning")))
+    )
+    latest = current_metrics.subquery()
     stats = db.session.execute(
         db.select(
             func.avg(latest.c.cpu_usage),
-            func.avg(latest.c.ram_percent),
+            func.sum(latest.c.ram_used) * 100.0 / func.nullif(func.sum(latest.c.ram_total), 0),
             func.sum(latest.c.disk_used),
         )
     ).one()
     alerts = db.session.scalars(db.select(Alert).order_by(Alert.created_at.desc()).limit(8)).all()
-    servers = db.session.scalars(db.select(Server).order_by(Server.name).limit(10)).all()
+    page = db.paginate(
+        db.select(Server).order_by(Server.name, Server.id), per_page=20, max_per_page=20
+    )
+    metrics = {
+        metric.server_id: metric
+        for metric in db.session.scalars(
+            latest_query().where(ServerMetric.server_id.in_([server.id for server in page.items]))
+        )
+    }
+    critical = set(
+        db.session.scalars(
+            db.select(Alert.server_id)
+            .where(
+                Alert.severity == "critical",
+                Alert.resolved_at.is_(None),
+                Alert.alert_type != "connection",
+            )
+            .distinct()
+        )
+    )
+    active_services = sum(
+        sum(state == "active" for state in (details or {}).get("services", {}).values())
+        for details in db.session.scalars(db.select(latest.c.details))
+    )
+    last_backup = db.session.scalar(
+        db.select(AdminAction)
+        .where(AdminAction.action == "database_backup", AdminAction.status.in_(("done", "failed")))
+        .order_by(AdminAction.created_at.desc(), AdminAction.id.desc())
+        .limit(1)
+    )
     return render_template(
         "dashboard.html",
         counts=counts,
         total=sum(counts.values()),
         stats=stats,
         alerts=alerts,
-        servers=servers,
+        servers=page.items,
+        page=page,
+        metrics=metrics,
+        critical=critical,
+        active_services=active_services,
+        last_backup=last_backup,
     )
 
 

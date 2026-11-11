@@ -28,6 +28,13 @@
                                            value="{{ interval }}"
                                            required>
         </label>
+        <input type="hidden" name="automation_present" value="1">
+        <label class="check">
+          <input type="checkbox"
+                 name="automation_enabled"
+                 {% if automation_enabled %}checked{% endif %}>
+          Дозволити автоматичні дії на VPS
+        </label>
         <button>Зберегти налаштування</button>
       </form>
       <p class="muted small">Інтервали перевірки й пороги задаються на сторінці кожного сервера.</p>

@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Термінал · {{ server.name }}{% endblock %}
+{% block scripts %}
+  {% if access and server.is_active %}
+    <link rel="stylesheet"
+          href="{{ url_for('static', filename='vendor/xterm.css') }}">
+    <script defer src="{{ url_for('static', filename='vendor/xterm.js') }}"></script>
+    <script defer
+            src="{{ url_for('static', filename='vendor/xterm-addon-fit.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='js/terminal.js') }}"></script>
+  {% endif %}
+{% endblock %}
+{% block content %}
+  <div class="page-heading">
+    <div>
+      <h1>Термінал · {{ server.name }}</h1>
+      <p class="muted">{{ server.ip_address }} · SSH {{ server.ssh_port }}</p>
+    </div>
+    <a class="button secondary"
+       href="{{ url_for('servers.detail', server_id=server.id) }}">До сервера</a>
+  </div>
+  {% if access %}
+    {% if server.is_active %}
+      <section class="panel terminal-panel">
+        <div class="section-heading">
+          <div class="row">
+            <span id="terminal-status" role="status">Від’єднано</span>
+            <time id="terminal-elapsed" class="muted">00:00</time>
+            <span id="terminal-command-time"
+                  class="muted"
+                  aria-label="Час виконання команди"></span>
+          </div>
+          <div class="row terminal-actions">
+            <button type="button" id="terminal-connect">Підключити</button>
+            <button type="button" id="terminal-interrupt" class="secondary" disabled>Ctrl+C</button>
+            <button type="button" id="terminal-clear" class="secondary">Очистити</button>
+          </div>
+        </div>
+        <div id="terminal-view"
+             data-path="{{ request.path.rstrip('/') }}/socket"
+             aria-label="SSH-термінал"></div>
+      </section>
+    {% endif %}
+    <details class="panel">
+      <summary>Публічний ключ термінала</summary>
+      <p>Для наявного VPS додайте цей рядок до <code>authorized_keys</code> користувача <code>{{ access.username }}</code>.</p>
+      <pre class="installation-code">restrict,pty {{ access.ssh_public_key }}</pre>
+    </details>
+  {% else %}
+    <form method="post"
+          class="panel form-panel"
+          action="{{ url_for('servers.setup_terminal', server_id=server.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>
+        Окремий непривілейований SSH-акаунт
+        <input name="username" value="serverwatch-terminal" maxlength="32" required>
+      </label>
+      <div class="form-actions">
+        <button>Створити ключ термінала</button>
+      </div>
+    </form>
+  {% endif %}
+{% endblock %}

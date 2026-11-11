@@ -67,7 +67,8 @@ def recommendations(server, metric, level):
 def report(server):
     metric = latest_metric(server.id)
     header = (
-        f"📊 <b>ЗВІТ СЕРВЕРА</b>\n{escape(server.name)}\nСтан: {escape(server.status.upper())}\n"
+        f"📊 <b>ЗВІТ СЕРВЕРА</b>\n{escape(server.name)} · {escape(server.ip_address)}\n"
+        f"Стан: {escape(server.status.upper())}\n"
     )
     greeting = holiday_greeting(server)
     if greeting:
@@ -82,8 +83,19 @@ def report(server):
         f"💾 SWAP: {metric.swap_percent:.1f}% ({size(metric.swap_used)} / {size(metric.swap_total)})\n"
         f"💿 DISK: {metric.disk_percent:.1f}% ({size(metric.disk_used)} / {size(metric.disk_total)})\n"
         f"⚙️ Load Average: {load}\n🕒 Uptime: {details.get('uptime', 0) / 86400:.1f} днів\n"
-        f"Дані: {metric.collected_at:%Y-%m-%d %H:%M} UTC\n\n<b>АНАЛІЗ</b>\n"
+        f"Дані: {metric.collected_at:%Y-%m-%d %H:%M} UTC\n"
     )
+    services = details.get("services", {})
+    if services:
+        labels = {
+            "active": "працює",
+            "inactive": "зупинено",
+            "failed": "збій",
+            "unknown": "невідомо",
+        }
+        lines = [f"{name}: {labels.get(state, state)}" for name, state in services.items()]
+        text += "\n<b>Сервіси</b>\n" + escaped_excerpt("\n".join(lines), 500) + "\n"
+    text += "\n<b>АНАЛІЗ</b>\n"
     if utcnow() - metric.collected_at > timedelta(seconds=server.monitoring_interval * 2):
         text += "⚠️ Дані застаріли; поточний стан ресурсів невідомий.\n"
     for kind, value in (

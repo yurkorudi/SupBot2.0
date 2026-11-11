@@ -16,19 +16,72 @@
     <a class="button secondary"
        href="{{ url_for('servers.edit',server_id=server.id) }}">Налаштувати</a>
   </div>
-  <section class="panel">
+  <nav class="section-links"
+       id="server-sections"
+       aria-label="Розділи сервера">
+    <a href="#overview">Огляд</a>
+    <a href="#monitoring">Моніторинг</a>
+    <a href="#services">Сервіси</a>
+    <a href="{{ url_for('servers.terminal', server_id=server.id) }}">Термінал</a>
+    <a href="#backups">Бекапи</a>
+    <a href="{{ url_for('settings.security', server_id=server.id) }}">Журнал дій</a>
+    <a href="{{ url_for('servers.edit', server_id=server.id) }}">Налаштування</a>
+  </nav>
+  <section class="panel" id="overview" data-server-section="overview">
     <div class="section-heading">
       <h2>Підключення</h2>
       {{ status(server.installation_status) }}
     </div>
     {% if server.installation_error %}<p class="notice error">{{ server.installation_error }}</p>{% endif %}
+    {% if server.is_active and server.status != "offline" %}
+      <form method="post"
+            action="{{ url_for('servers.request_reboot', server_id=server.id) }}"
+            data-confirm="Перезавантажити VPS {{ server.name }}?">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="confirmed" value="yes">
+        <button class="secondary"
+                {% if recovery and (recovery.verify_until or recovery.manual_actor_id is not none) %}disabled{% endif %}>
+          Перезавантажити VPS
+        </button>
+      </form>
+    {% endif %}
     {% if server.ssh_public_key and server.installation_status != "ACTIVE" %}<a class="button secondary"
                                                                                 href="{{ url_for('servers.setup', server_id=server.id) }}">Продовжити підключення</a>{% endif %}
+  </section>
+  <section class="panel" id="backups" data-server-section="backups">
+    <div class="section-heading">
+      <h2>Резервні копії баз даних</h2>
+      {% if server.is_active %}
+        <form method="post"
+              action="{{ url_for('servers.request_backup', server_id=server.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="secondary"
+                  {% if backup and (backup.status == 'running' or backup.requested_by is not none) %}disabled{% endif %}>
+            Створити бекап
+          </button>
+        </form>
+      {% endif %}
+    </div>
+    {% if backup %}
+      <p>{{ {'pending':'Очікується', 'running':'Виконується', 'done':'Перевірено', 'failed':'Помилка', 'cancelled':'Скасовано'}.get(backup.status) }}</p>
+      {% if backup.result %}<p class="muted">{{ backup.result }}</p>{% endif %}
+      {% if backup.sha256 %}
+        <p class="muted small backup-checksum">SHA-256 <code>{{ backup.sha256 }}</code></p>
+      {% endif %}
+      <div class="resource-strip">
+        <div>Останній успішний <strong>{{ backup.last_success_at.strftime("%d.%m.%Y %H:%M") ~ ' UTC' if backup.last_success_at else '—' }}</strong></div>
+        <div>СУБД <strong>{{ backup.engines|join(", ") if backup.engines else '—' }}</strong></div>
+        <div>Розмір <strong>{{ ('%.2f MiB'|format(backup.size / 1048576)) if backup.size else '—' }}</strong></div>
+        <div>Наступний запуск <strong>{{ backup.next_at.strftime("%d.%m.%Y %H:%M") ~ ' UTC' if backup.next_at else '—' }}</strong></div>
+      </div>
+    {% else %}
+      <p class="muted">Резервних копій ще немає.</p>
+    {% endif %}
   </section>
   {% if server.last_error %}
     <div class="notice error">{{ server.last_error }}</div>
   {% endif %}
-  <section class="panel">
+  <section class="panel" id="monitoring" data-server-section="monitoring">
     <div class="section-heading">
       <h2>Використання ресурсів</h2>
       <select id="chart-period" aria-label="Період статистики">
@@ -54,8 +107,62 @@
     </div>
     <p id="chart-message" class="muted small"></p>
   </section>
+  <section class="panel" id="services" data-server-section="services">
+    <h2>Сервіси</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Назва</th>
+            <th>Тип</th>
+            <th>Стан</th>
+            <th>Перевірено UTC</th>
+            <th>Останній перезапуск UTC</th>
+            <th>Моніторинг</th>
+            <th>Дія</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for service in services %}
+            <tr>
+              <td>{{ service.name }}</td>
+              <td>{{ service.kind }}</td>
+              <td>{{ {'running':'Працює','stopped':'Зупинено','failed':'Збій','unknown':'Невідомо'}.get(service.status, service.status) }}</td>
+              <td>{{ service.checked_at.strftime("%d.%m.%Y %H:%M") }}</td>
+              <td>{{ service.restarted_at.strftime("%d.%m.%Y %H:%M") if service.restarted_at else '—' }}</td>
+              <td>
+                <form method="post"
+                      action="{{ url_for('servers.service_monitoring', server_id=server.id, service_id=service.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden"
+                         name="enabled"
+                         value="{{ 'no' if service.monitored else 'yes' }}">
+                  <button class="quiet">{{ 'Вимкнути' if service.monitored else 'Увімкнути' }}</button>
+                </form>
+              </td>
+              <td>
+                {% if server.is_active and service.status != "unknown" %}
+                  <form method="post"
+                        action="{{ url_for('servers.service_restart', server_id=server.id, service_id=service.id) }}"
+                        data-confirm="Перезапустити {{ service.name }} на {{ server.name }}?">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="confirmed" value="yes">
+                    <button class="secondary">Перезапустити</button>
+                  </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="7" class="empty">Дані про виявлені сервіси ще не отримано.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
   {% if metric %}
-    <section class="panel">
+    <section class="panel" data-server-section="overview">
       <h2>Останній знімок · {{ metric.collected_at.strftime("%d.%m.%Y %H:%M") }} UTC</h2>
       <div class="resource-strip">
         <div>
@@ -140,7 +247,7 @@
         <table>
           <thead>
             <tr>
-              <th>Systemd-сервіс</th>
+              <th>Сервіс</th>
               <th>Поточний стан</th>
             </tr>
           </thead>
@@ -160,7 +267,7 @@
       </div>
     </section>
   {% endif %}
-  <section class="panel">
+  <section class="panel" data-server-section="overview">
     <h2>Авторизація Telegram</h2>
     <p>{{ 'Групу авторизовано' if server.is_authorized else 'Очікує авторизації' }} · {{ server.telegram_group_id or 'Групу не задано' }}</p>
     <form method="post"
@@ -169,7 +276,7 @@
       <button class="secondary">Створити новий одноразовий код</button>
     </form>
   </section>
-  <section class="panel">
+  <section class="panel" data-server-section="monitoring">
     <h2>Історія аварій</h2>
     <div class="table-wrap">
       <table>
@@ -205,7 +312,7 @@
     </div>
     {{ pagination(alerts) }}
   </section>
-  <section class="panel">
+  <section class="panel" data-server-section="monitoring">
     <div class="section-heading">
       <h2>Останні системні події</h2>
       <a href="{{ url_for('servers.logs', server_id=server.id) }}">Уся історія →</a>

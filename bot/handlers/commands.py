@@ -82,7 +82,11 @@ async def callback(query: CallbackQuery, backend):
     operation, identifier = query.data.split(":")
     try:
         await backend.callback(
-            operation, int(identifier), query.message.chat.id, query.from_user.id
+            operation,
+            int(identifier),
+            query.message.chat.id,
+            query.from_user.id,
+            query.message.message_id,
         )
     except (PermissionError, ValueError) as error:
         await query.answer(str(error), show_alert=True)
@@ -93,5 +97,5 @@ async def callback(query: CallbackQuery, backend):
     await query.message.answer(
         "🛠 Адміністратор займається аварією."
         if operation == "ack"
-        else "⏳ Запитано SWAP +1 GB. Результат надійде окремим повідомленням."
+        else "⏳ Запитано SWAP. Результат з’явиться в повідомленні про аварію."
     )

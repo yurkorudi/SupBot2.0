@@ -20,6 +20,7 @@ def main():
             raise ValueError
         services = data.get("services", [])
         since = data.get("since")
+        discover = data.get("discover", True)
         if (
             not isinstance(services, list)
             or len(services) > 20
@@ -29,25 +30,71 @@ def main():
                 for name in services
             )
             or type(since) is not int
+            or type(discover) is not bool
             or not 0 <= since <= time.time() + 300
         ):
             raise ValueError
         sys.path.insert(0, "/usr/local/lib/serverwatch")
         from remote_collect import collect
 
-        print(json.dumps(collect(services, since)))
+        # Older on-host collectors only accept two parameters.
+        print(json.dumps(collect(services, since) if discover else collect(services, since, False)))
         return 0
-    if operation == "serverwatch-swap":
+    if operation in ("serverwatch-swap", "serverwatch-swap-persistent"):
+        helper = {
+            "serverwatch-swap": "/usr/local/sbin/serverwatch-swap",
+            "serverwatch-swap-persistent": "/usr/local/sbin/serverwatch-swap-persistent",
+        }[operation]
         result = subprocess.run(
-            ["/usr/bin/sudo", "-n", "/usr/local/sbin/serverwatch-swap"],
+            ["/usr/bin/sudo", "-n", helper],
             capture_output=True,
-            timeout=130,
+            timeout=150 if operation == "serverwatch-swap-persistent" else 130,
             check=False,
         )
         if result.returncode:
             print(json.dumps({"status": "denied", "reason": "Операцію SWAP не дозволено."}))
         else:
             sys.stdout.write(result.stdout[:4096].decode("utf-8", errors="replace"))
+        return 0
+    if operation == "serverwatch-reboot":
+        subprocess.run(
+            ["/usr/bin/sudo", "-n", "/usr/bin/systemctl", "--no-block", "reboot"],
+            capture_output=True,
+            timeout=8,
+            check=True,
+        )
+        return 0
+    if operation in (
+        "serverwatch-db-discover",
+        "serverwatch-db-mysql",
+        "serverwatch-db-mariadb",
+        "serverwatch-db-postgresql",
+    ):
+        mode = operation.removeprefix("serverwatch-db-")
+        return subprocess.run(
+            ["/usr/bin/sudo", "-n", "/usr/local/sbin/serverwatch-db-export", mode],
+            timeout=900,
+            check=False,
+        ).returncode
+    if operation == "serverwatch-service-restart":
+        data = json.loads(sys.stdin.buffer.read(1025))
+        kind, name = data["type"], data["name"]
+        if kind == "systemd" and re.fullmatch(r"[A-Za-z0-9_.@-]{1,90}\.service", name):
+            command = ["/usr/bin/systemctl", "restart", "--", name]
+            status = ["/usr/bin/systemctl", "show", "--property=ActiveState", "--value", "--", name]
+        elif kind == "docker" and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}", name):
+            command = ["/usr/bin/docker", "restart", "--time", "10", "--", name]
+            status = ["/usr/bin/docker", "inspect", "--format", "{{.State.Status}}", "--", name]
+        else:
+            raise ValueError
+        # sudoers must allow the exact command and service name on this host.
+        subprocess.run(
+            ["/usr/bin/sudo", "-n", *command], capture_output=True, timeout=35, check=True
+        )
+        checked = subprocess.run(
+            ["/usr/bin/sudo", "-n", *status], capture_output=True, timeout=8, check=True, text=True
+        )
+        print(json.dumps({"state": checked.stdout.strip()[:30]}))
         return 0
     sys.stderr.write("Доступні тільки фіксовані операції ServerWatch.\n")
     return 126

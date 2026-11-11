@@ -9,6 +9,16 @@ import sys
 import time
 from pathlib import Path
 
+UNIT_NAME = re.compile(r"[A-Za-z0-9_.@-]{1,90}\.service")
+APPLICATION_UNIT = re.compile(
+    r"(?:nginx|apache2|httpd|mysql|mysqld|mariadb|postgresql|redis|valkey|"
+    r"gunicorn|uvicorn|uwsgi|supervisor|supervisord|docker|containerd|"
+    r"caddy|traefik|haproxy|memcached|rabbitmq|mongod|php[0-9.]*-fpm|"
+    r"celery|prometheus|grafana)(?:[-@.].*)?\.service"
+)
+CONTAINER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}")
+SYSTEM_UNIT = re.compile(r"(?:systemd-|dbus|user@|getty@|serial-getty@|init\.scope)")
+
 
 def read(path):
     return Path(path).read_text()
@@ -25,6 +35,60 @@ def command(args):
 def cpu_ticks():
     values = list(map(int, read("/proc/stat").splitlines()[0].split()[1:9]))
     return sum(values), values[3] + values[4]
+
+
+def discover_services(selected):
+    inventory = {}
+    installed = command(
+        ["systemctl", "list-unit-files", "--type=service", "--no-legend", "--no-pager", "--plain"]
+    )
+    loaded = command(
+        [
+            "systemctl",
+            "list-units",
+            "--type=service",
+            "--all",
+            "--no-legend",
+            "--no-pager",
+            "--plain",
+        ]
+    )
+    for line in installed.splitlines():
+        fields = line.split()
+        if fields and APPLICATION_UNIT.fullmatch(fields[0]) and not fields[0].endswith("@.service"):
+            inventory[fields[0]] = "inactive" if loaded else "unknown"
+    for line in loaded.splitlines():
+        fields = line.split()
+        if len(fields) >= 4 and UNIT_NAME.fullmatch(fields[0]):
+            name, _, state, substate = fields[:4]
+            if (
+                name in selected
+                or APPLICATION_UNIT.fullmatch(name)
+                or (substate == "running" and not SYSTEM_UNIT.match(name))
+            ):
+                inventory[name] = state
+    inventory.update(selected)
+    services = [
+        {"type": "systemd", "name": name, "state": state}
+        for name, state in sorted(inventory.items())
+        if UNIT_NAME.fullmatch(name)
+    ][:150]
+    if shutil.which("docker"):
+        containers = command(["docker", "ps", "-a", "--format", "{{.Names}}\t{{.State}}"])
+        if not containers and os.access("/usr/local/sbin/serverwatch-docker-list", os.X_OK):
+            containers = command(["/usr/bin/sudo", "-n", "/usr/local/sbin/serverwatch-docker-list"])
+        for line in containers.splitlines()[:100]:
+            name, separator, state = line.partition("\t")
+            if separator and CONTAINER_NAME.fullmatch(name):
+                services.append({"type": "docker", "name": name, "state": state})
+    return services
+
+
+def boot_identifier():
+    try:
+        return read("/proc/sys/kernel/random/boot_id").strip()
+    except OSError:
+        return None
 
 
 def parse_service_event(line, services):
@@ -67,7 +131,7 @@ def parse_service_event(line, services):
         return None
 
 
-def collect(services, since):
+def collect(services, since, discover=True):
     before, idle_before = cpu_ticks()
     time.sleep(0.25)
     after, idle_after = cpu_ticks()
@@ -164,16 +228,25 @@ def collect(services, since):
             "cpu_cores": os.cpu_count(),
             "load_average": list(load),
             "uptime": float(read("/proc/uptime").split()[0]),
+            "boot_id": boot_identifier(),
+            "persistent_swap": os.access("/usr/local/sbin/serverwatch-swap-persistent", os.X_OK),
             "processes": sum(1 for path in Path("/proc").iterdir() if path.name.isdigit()),
             "filesystems": filesystems[:30],
             "interfaces": interfaces[:30],
             "network_in": sum(i["in"] for i in interfaces if i["name"] != "lo"),
             "network_out": sum(i["out"] for i in interfaces if i["name"] != "lo"),
             "services": states,
+            "inventory": discover_services(states) if discover else None,
             "errors": events[:30],
         },
     }
 
 
 if __name__ == "__main__":
-    print(json.dumps(collect(json.loads(sys.argv[1]), int(sys.argv[2]))))
+    print(
+        json.dumps(
+            collect(
+                json.loads(sys.argv[1]), int(sys.argv[2]), len(sys.argv) < 4 or sys.argv[3] == "1"
+            )
+        )
+    )

@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+test "$#" -eq 0 || exit 126
+exec /usr/bin/docker ps -a --format "$(printf '{{.Names}}\t{{.State}}')"

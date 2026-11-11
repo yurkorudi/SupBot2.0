@@ -13,7 +13,7 @@ def fingerprint(public_key):
     return "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("=")
 
 
-def generate_keypair(server):
+def new_keypair(comment):
     key = Ed25519PrivateKey.generate()
     private = key.private_bytes(
         serialization.Encoding.PEM,
@@ -25,8 +25,14 @@ def generate_keypair(server):
         .public_bytes(serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH)
         .decode()
     )
-    server.ssh_private_key_encrypted = encrypt(private)
-    server.ssh_public_key = f"{public} serverwatch-server-{server.id}"
+    return encrypt(private), f"{public} {comment}"
+
+
+def generate_keypair(server):
+    server.ssh_private_key_encrypted, server.ssh_public_key = new_keypair(
+        f"serverwatch-server-{server.id}"
+    )
+    public = server.ssh_public_key
     server.ssh_key_fingerprint = fingerprint(public)
 
 

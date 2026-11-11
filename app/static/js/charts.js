@@ -37,6 +37,8 @@ async function refreshCharts() {
   const period = document.getElementById("chart-period")?.value || "24h";
   const message = document.getElementById("chart-message");
   const current = ++generation;
+  const loadingPanel = detail || document.getElementById("overview-chart")?.parentElement;
+  loadingPanel?.setAttribute("aria-busy", "true");
   try {
     if (typeof Chart === "undefined") throw new Error("Chart.js не завантажено");
     const response = await fetch(`/api/analytics/${encodeURIComponent(serverId)}?period=${period}`);
@@ -61,7 +63,9 @@ async function refreshCharts() {
       ]);
     }
   } catch (_) {
-    message.textContent = "Не вдалося завантажити графіки. Перевірте сеанс і локальний файл Chart.js.";
+    if (current === generation) message.textContent = "Не вдалося завантажити графіки.";
+  } finally {
+    if (current === generation) loadingPanel?.removeAttribute("aria-busy");
   }
 }
 

@@ -31,12 +31,16 @@ def parse_private_key(value):
 
 
 @contextmanager
-def connect(server, private_key=None):
+def connect(server, private_key=None, *, username=None):
     client = paramiko.SSHClient()
     try:
         if server.ssh_host_key:
             host_key, _ = parse_host_key(server.ssh_host_key)
-            hostname = server.ip_address if server.ssh_port == 22 else f"[{server.ip_address}]:{server.ssh_port}"
+            hostname = (
+                server.ip_address
+                if server.ssh_port == 22
+                else f"[{server.ip_address}]:{server.ssh_port}"
+            )
             client.get_host_keys().add(hostname, host_key.get_name(), host_key)
         else:
             known_hosts = current_app.config["SSH_KNOWN_HOSTS"]
@@ -49,7 +53,7 @@ def connect(server, private_key=None):
         client.connect(
             server.ip_address,
             port=server.ssh_port,
-            username=server.ssh_username,
+            username=username or server.ssh_username,
             pkey=key,
             timeout=timeout,
             banner_timeout=timeout,
@@ -99,3 +103,30 @@ def execute(client, command, limit=256 * 1024, timeout=None, input_data=None):
     if channel.recv_exit_status() != 0:
         raise SSHFailure("Віддалена операція завершилася помилкою.")
     return data.decode("utf-8", errors="replace")
+
+
+def stream_to(client, command, target, *, timeout, limit):
+    stdin, stdout, _ = client.exec_command(command, timeout=timeout)
+    stdin.close()
+    channel = stdout.channel
+    deadline = time.monotonic() + timeout
+    size = 0
+    try:
+        while time.monotonic() < deadline:
+            if channel.recv_stderr_ready():
+                channel.recv_stderr(32768)
+            if channel.recv_ready():
+                block = channel.recv(65536)
+                size += len(block)
+                if size > limit:
+                    raise SSHFailure("Розмір дампу перевищив ліміт.")
+                target.write(block)
+            elif channel.exit_status_ready():
+                if size == 0 or channel.recv_exit_status() != 0:
+                    raise SSHFailure("Віддалений дамп порожній або команда завершилася помилкою.")
+                return size
+            else:
+                time.sleep(0.02)
+        raise SSHFailure("Час створення дампу вичерпано.")
+    finally:
+        channel.close()

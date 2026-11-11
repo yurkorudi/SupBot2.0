@@ -65,6 +65,8 @@ Telegram Group ID можна залишити порожнім — бот зап
 - Створює `monitor` або перевіряє придатність наявного облікового запису.
 - Ставить root-owned dispatcher і збирач у `/usr/local/lib/serverwatch/`.
 - Додає публічний ключ із `restrict,command="/usr/local/lib/serverwatch/ssh_dispatch.py"`.
+- Створює окремий непривілейований `serverwatch-terminal` для браузерного SSH PTY.
+- Встановлює точні sudo-правила для можливостей, вибраних у майстрі.
 - Зберігає сторонні рядки `authorized_keys`, не додає дублікати й перевіряє права.
 - Перевіряє `sshd -t`, читає лише **публічний** host key і надсилає його через HTTPS.
 
@@ -73,11 +75,9 @@ Telegram Group ID можна залишити порожнім — бот зап
 класифіковані події, а не сирі MESSAGE. Наявний привілейований monitor або monitor
 із nologin/false викликає зрозумілу помилку; сторонню конфігурацію скрипт не виправляє.
 
-Ключ не дозволяє інтерактивний shell, forwarding, PTY чи довільні команди.
-Dispatcher приймає тільки `serverwatch-collect` із перевіреним JSON у stdin
-та `serverwatch-swap` для окремо дозволеного helper без аргументів.
-Загального sudo для monitor немає. Деталі обмежень описані в
-[OpenSSH](https://man.openbsd.org/sshd#AUTHORIZED_KEYS_FILE_FORMAT).
+Ключ `monitor` запускає dispatcher із фіксованими операціями. Окремий ключ
+вебтермінала дозволяє PTY для свого SSH-акаунта. Для конкретного сервісу
+перезапуск потребує окремих точних правил sudoers. [Налаштування операцій VPS](vps-operations.md).
 
 Наприкінці скрипт повідомить, що центральний worker перевіряє SSH. Поверніться
 до відкритої сторінки майстра. HTTPS callback лише закріплює host key й ставить

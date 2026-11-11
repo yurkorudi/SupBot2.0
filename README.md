@@ -32,18 +32,21 @@ required.
 | Area | What ServerWatch provides |
 |---|---|
 | Resource monitoring | CPU utilization, RAM, swap, and root filesystem usage collected over SSH |
-| Service health | Configurable systemd service checks and classified journal events |
-| Dashboard | Server inventory, installation progress, configurable thresholds, and historical charts |
+| Service health | systemd and Docker discovery, per-service monitoring, and scoped restarts |
+| Dashboard | Fleet metrics, server tabs, historical charts, and a filterable activity journal |
 | Telegram integration | Per-group server binding, scheduled reports, on-demand checks, incident notifications, and administrator acknowledgment |
 | Guided onboarding | Per-server Ed25519 keys, a generated client setup script, HTTPS callback, and SSH verification before activation |
 | Metric history | Raw samples retained for 24 hours; hourly averages and maxima retained for 90 days |
 | Delivery resilience | A database-backed outbox with retries, separate from metric collection |
-| Optional remediation | An administrator-triggered, restricted helper that adds a temporary 1 GiB swap file |
+| Remediation | Persistent swap provisioning, delayed critical RAM recovery, and opt-in CPU reboot with SSH verification |
+| Web terminal | Interactive SSH PTY using an independent encrypted key and per-VPS administrator access |
+| Remote database backups | Daily or on-demand SQL exports from MySQL, MariaDB, and PostgreSQL into a verified central archive |
 | Optional local AI | Short metric explanations through a loopback-only Ollama endpoint; disabled by default |
 
 The default collection interval is **180 seconds**, with scheduled Telegram
-reports every **4 hours**. These serve different purposes: collection refreshes
-the stored state, while reports summarize it for the group.
+reports every **4 hours**. Each VPS can keep that interval, select local times
+and weekdays, or turn scheduled reports off. `/report` remains available in
+an authorized group. [Configure VPS operations](docs/vps-operations.md).
 
 Reports include a rotating local library of Ukrainian comments, some containing
 informal humor and mild profanity. This feature does not require an AI service.
@@ -72,7 +75,7 @@ flowchart LR
 | Web | `run:app` / `app.create_app()` | `serverwatch-web` | Dashboard, authentication, configuration, installation callbacks |
 | Bot | `python -m bot.main` | `serverwatch-bot` | Telegram commands, callbacks, and outbox delivery |
 | Monitor | `python -m monitoring.worker` | `serverwatch-monitor` | SSH collection, alerts, scheduled reports, jobs, aggregation, and cleanup |
-| Backup | `/usr/local/sbin/serverwatch-backup` | `serverwatch-backup.timer` | Scheduled MySQL dumps |
+| Central backup | `/usr/local/sbin/serverwatch-backup` | `serverwatch-backup.timer` | Backup of the ServerWatch database |
 
 The monitor owns scheduling. The web process does not run a scheduler, and
 Telegram polling requires no inbound bot port. Gunicorn listens on
@@ -100,9 +103,10 @@ semantics: a crash between sending and committing may produce a duplicate.
 - **Service isolation:** systemd units use filesystem restrictions and run
   without local privilege escalation.
 
-The generated installer needs root or sudo on the client during setup. Routine
-collection runs without sudo. Optional swap remediation allows only a specific
-root-owned helper without arguments; it does not grant a general shell or sudo.
+The generated installer needs root or sudo on the client during setup.
+Resource collection runs with the monitor account's privileges. Optional
+Docker inventory, swap, reboot, and database exports use specific sudo rules.
+The web terminal uses a dedicated unprivileged client account.
 
 See [SECURITY.md](SECURITY.md) for the detailed trust boundaries and operational
 constraints. Back up the original `ENCRYPTION_KEY` separately from database
@@ -135,6 +139,7 @@ requirements-dev.txt    Development and validation dependencies
 | [Security notes](SECURITY.md) | Authentication, SSH restrictions, secrets, and delivery guarantees |
 | [Deployment audit](docs/deployment-audit.md) | Implementation checks and the limits of automated validation |
 | [Migration README](migrations/README) | Revision history and schema maintenance workflow |
+| [VPS operations](docs/vps-operations.md) | Reports, recovery, service restarts, terminal access, and remote backup restore |
 
 ## Deployment runbook
 
@@ -813,8 +818,11 @@ and detailed client prerequisites.
 ## 12. Optional swap helper
 
 For new clients, enable the swap option in the onboarding wizard. The installer
-sets up the helper and a narrow sudo rule for `monitor`; installation itself does
-not create swap.
+sets up the persistent helper and a narrow sudo rule for `monitor`. The
+monitor checks for at least 2 GiB after verifying SSH when global automation
+and initial provisioning are enabled. The helper activates swap and enables a
+systemd swap unit. Critical RAM recovery has a separate per-server switch.
+See [VPS operations](docs/vps-operations.md) for prerequisites and behavior.
 
 The following manual steps are **only for legacy clients**. Transfer
 `scripts/serverwatch-swap` and `deploy/serverwatch-swap.sudoers` through your
@@ -1041,6 +1049,10 @@ sudo -u serverwatch git -C /opt/serverwatch pull --ff-only
 sudo -u serverwatch /opt/serverwatch/.venv/bin/python -m pip install -r /opt/serverwatch/requirements.txt
 sudo -u serverwatch /opt/serverwatch/.venv/bin/python -m pip check
 sudo /opt/serverwatch/.venv/bin/python /opt/serverwatch/scripts/manage.py upgrade
+sudo install -o root -g root -m 0644 /opt/serverwatch/deploy/nginx-limits.conf /etc/nginx/conf.d/serverwatch-limits.conf
+sudo install -o root -g root -m 0644 /opt/serverwatch/deploy/nginx-proxy.conf /etc/nginx/snippets/serverwatch-proxy.conf
+sudo nginx -t
+sudo systemctl reload nginx
 sudo systemctl daemon-reload
 sudo systemctl start serverwatch-web serverwatch-bot serverwatch-monitor
 sudo systemctl start serverwatch-backup.timer
@@ -1051,6 +1063,9 @@ The onboarding migration preserves existing SSH keys, Telegram groups, and
 history. Before using the wizard on an upgraded installation, set
 `PUBLIC_BASE_URL=https://YOUR_PUBLIC_IP_OR_DOMAIN` in the runtime environment and
 restart web, bot, and monitor. Do not rerun the environment generator.
+The current schema head is `35166c40bfc0`. Update the client dispatcher and
+collector on previously enrolled VPS hosts to use the new remote operations.
+See [existing-client upgrades](docs/vps-operations.md#update-an-existing-vps).
 
 Do not replace `ENCRYPTION_KEY`; rotation requires re-encrypting existing data.
 If you lose your authenticator, use a trusted administrator shell to reset TOTP
@@ -1125,4 +1140,6 @@ Use synthetic credentials and mocked remote services in tests.
 
 ServerWatch is licensed under the [Apache License 2.0](LICENSE).
 Third-party assets retain their respective notices, including the bundled
-[Chart.js license](app/static/vendor/Chart.js.LICENSE.md).
+[Chart.js license](app/static/vendor/Chart.js.LICENSE.md) and the
+[xterm.js](app/static/vendor/xterm.LICENSE.md) and
+[FitAddon](app/static/vendor/xterm-addon-fit.LICENSE.md) licenses.

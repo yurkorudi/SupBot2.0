@@ -12,16 +12,25 @@ from app.models import AdminAction, LoginAttempt, User, utcnow
 from .encryption import decrypt
 
 
-def audit(actor, action, result, server_id=None):
+def audit(actor, action, result, server_id=None, *, source="manual", status="done"):
     db.session.add(
-        AdminAction(admin_id=str(actor), action=action, result=result, server_id=server_id)
+        AdminAction(
+            admin_id=str(actor),
+            action=action,
+            result=result,
+            server_id=server_id,
+            source=source,
+            status=status,
+        )
     )
 
 
 def require_admin(user_id):
     configured = current_app.config["TELEGRAM_ADMIN_ID"]
     if not configured or user_id != configured:
-        audit(user_id, "telegram_denied", "Відмовлено у доступі")
+        audit(
+            user_id, "telegram_denied", "Відмовлено у доступі", source="telegram", status="failed"
+        )
         db.session.commit()
         raise PermissionError("Дія доступна лише головному адміністратору.")
 

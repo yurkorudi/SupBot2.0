@@ -3,7 +3,7 @@
 import asyncio
 
 from app.extensions import db
-from app.models import Server
+from app.models import Server, ServerReportSchedule
 from app.services.authorization import authorize_group
 from app.services.report_generator import report
 from app.services.swap_manager import acknowledge, request_swap
@@ -63,7 +63,11 @@ class Backend:
                 failed(key)
                 for server in servers:
                     server.next_check_at = utcnow()
-                    server.next_report_at = utcnow() - timedelta(seconds=1)
+                    schedule = db.session.get(ServerReportSchedule, server.id)
+                    if schedule is None:
+                        server.next_report_at = utcnow() - timedelta(seconds=1)
+                    else:
+                        schedule.manual_requested_at = utcnow()
                 db.session.commit()
             texts = [report(server) for server in servers]
             db.session.commit()
@@ -71,6 +75,7 @@ class Backend:
 
         return await self.run(get_reports)
 
-    async def callback(self, operation, alert_id, group_id, user_id):
-        action = acknowledge if operation == "ack" else request_swap
-        return await self.run(action, alert_id, group_id, user_id)
+    async def callback(self, operation, alert_id, group_id, user_id, message_id=None):
+        if operation == "ack":
+            return await self.run(acknowledge, alert_id, group_id, user_id)
+        return await self.run(request_swap, alert_id, group_id, user_id, message_id)

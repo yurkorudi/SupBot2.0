@@ -75,6 +75,6 @@ def authorize_group(code, group_id, user_id):
     if result.rowcount != 1:
         db.session.rollback()
         raise ValueError("Код уже використано.")
-    audit(user_id, "authorize_group", "Групу підключено", server.id)
+    audit(user_id, "authorize_group", "Групу підключено", server.id, source="telegram")
     db.session.commit()
     return server

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from 'macros.html' import status, alert_type %}
+{% from 'macros.html' import status, alert_type, pagination %}
 {% block title %}Огляд системи{% endblock %}
 {% block breadcrumb %}Огляд системи{% endblock %}
 {% block scripts %}
@@ -17,11 +17,10 @@
     <a class="button" href="{{ url_for('servers.add') }}">＋ Додати сервер</a>
   </div>
   <div class="stats-grid">
-    {% for label, value, note, color in [('Усього серверів',total,'Підключена інфраструктура',''),('Онлайн',counts.get('online',0)+counts.get('warning',0),'SSH-з’єднання доступне','green'),('Недоступні',counts.get('offline',0),'Потребують перевірки','red'),('З попередженнями',counts.get('warning',0),'Перевищення порогів','amber')] %}
+    {% for label, value, color in [('Усього серверів',total,''),('Онлайн',counts.get('online',0)+counts.get('warning',0),'green'),('Недоступні',counts.get('offline',0),'red'),('Критичні',critical|length,'red')] %}
       <section class="stat panel">
         <span>{{ label }}</span>
         <strong class="{{ color }}">{{ value }}</strong>
-        <small>{{ note }}</small>
       </section>
     {% endfor %}
   </div>
@@ -30,10 +29,17 @@
       Середній CPU <strong>{{ '%.1f'|format(stats[0] or 0) }}%</strong>
     </div>
     <div>
-      Середня RAM <strong>{{ '%.1f'|format(stats[1] or 0) }}%</strong>
+      Використання RAM <strong>{{ '%.1f'|format(stats[1] or 0) }}%</strong>
     </div>
     <div>
       Використано дисків <strong>{{ '%.2f'|format((stats[2] or 0)/1073741824) }} GB</strong>
+    </div>
+    <div>
+      Активні сервіси <strong>{{ active_services }}</strong>
+    </div>
+    <div>
+      Останній бекап
+      <strong>{{ {'done':'Перевірено', 'failed':'Помилка'}.get(last_backup.status, '—') if last_backup else '—' }}</strong>
     </div>
   </div>
   <div class="dashboard-grid">
@@ -94,29 +100,42 @@
             <th>Сервер</th>
             <th>Клієнт / група</th>
             <th>Стан</th>
+            <th>CPU</th>
+            <th>RAM</th>
+            <th>Swap</th>
+            <th>Диск</th>
+            <th>Uptime</th>
+            <th>Сервіси</th>
             <th>Остання перевірка</th>
             <th>Telegram</th>
           </tr>
         </thead>
         <tbody>
           {% for server in servers %}
+            {% set metric = metrics.get(server.id) %}
             <tr>
               <td>
                 <a href="{{ url_for('servers.detail',server_id=server.id) }}">{{ server.name }}</a>
                 <small>{{ server.ip_address }}</small>
               </td>
               <td>{{ server.client_name or '—' }}</td>
-              <td>{{ status(server.status) }}</td>
+              <td>{{ status(server.status) }}{% if server.id in critical %} {{ status("critical") }}{% endif %}</td>
+              {% for field in ['cpu_usage', 'ram_percent', 'swap_percent', 'disk_percent'] %}
+                <td>{{ ('%.1f%%'|format(metric|attr(field))) if metric else '—' }}</td>
+              {% endfor %}
+              <td>{{ ('%.1f д'|format(metric.details.get('uptime', 0) / 86400)) if metric else '—' }}</td>
+              <td>{{ (metric.details.get('services', {}).values()|select('equalto', 'active')|list|length) if metric else '—' }}</td>
               <td>{{ server.last_success_at.strftime("%d.%m %H:%M") if server.last_success_at else 'Очікується' }}</td>
               <td>{{ 'Підключено' if server.is_authorized else 'Не авторизовано' }}</td>
             </tr>
           {% else %}
             <tr>
-              <td colspan="5" class="empty">Додайте сервер, щоб розпочати моніторинг.</td>
+              <td colspan="11" class="empty">Додайте сервер, щоб розпочати моніторинг.</td>
             </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
+    {{ pagination(page) }}
   </section>
 {% endblock %}

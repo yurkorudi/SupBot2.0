@@ -1,15 +1,17 @@
 {% macro status(value) %}
   <span class="badge {{ value }}">{{ {'PENDING_SETUP':'Очікує встановлення','INSTALLING':'Встановлення','VERIFYING':'Перевірка SSH','READY':'Готовий до Telegram','ACTIVE':'Підключено','INSTALLATION_FAILED':'Помилка встановлення','CONNECTION_FAILED':'SSH недоступний','DISABLED':'Вимкнено','online':'Онлайн','offline':'Недоступний','warning':'Увага','pending':'Очікує перевірки','critical':'Критично','open':'Відкрита','resolved':'Вирішена','acknowledged':'У роботі'}.get(value, value) }}</span>
 {% endmacro %}
-{% macro pagination(page) %}
+{% macro pagination(page, filters={}) %}
   <div class="pagination">
     <span>{{ page.total }} записів · Сторінка {{ page.page }} / {{ page.pages or 1 }}</span>
     <div class="row">
       {% if page.has_prev %}
-        <a class="button secondary" href="?page={{ page.prev_num }}">← Назад</a>
+        <a class="button secondary"
+           href="?page={{ page.prev_num }}{% if filters %}&amp;{{ filters|urlencode }}{% endif %}">← Назад</a>
       {% endif %}
       {% if page.has_next %}
-        <a class="button secondary" href="?page={{ page.next_num }}">Далі →</a>
+        <a class="button secondary"
+           href="?page={{ page.next_num }}{% if filters %}&amp;{{ filters|urlencode }}{% endif %}">Далі →</a>
       {% endif %}
     </div>
   </div>

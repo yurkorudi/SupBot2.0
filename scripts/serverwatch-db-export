@@ -1,0 +1,73 @@
+#!/usr/bin/python3 -I
+"""Stream SQL using local peer/socket authentication and fixed argument lists."""
+
+import json
+import os
+import stat
+import sys
+from pathlib import Path
+
+ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "HOME": "/"}
+MYSQL_CONFIG = Path("/etc/serverwatch/db-export.cnf")
+
+
+def mysql_options():
+    try:
+        info = MYSQL_CONFIG.lstat()
+    except FileNotFoundError:
+        return ["--no-defaults", "--user=root"]
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077:
+        raise PermissionError
+    directory = MYSQL_CONFIG.parent.lstat()
+    if not stat.S_ISDIR(directory.st_mode) or directory.st_uid != 0 or directory.st_mode & 0o022:
+        raise PermissionError
+    return [f"--defaults-file={MYSQL_CONFIG}"]
+
+
+def main():
+    if os.geteuid() != 0 or len(sys.argv) != 2:
+        return 126
+    options = {}
+    if Path("/usr/bin/mariadb-dump").is_file():
+        options["mariadb"] = [
+            "/usr/bin/mariadb-dump",
+            *mysql_options(),
+            "--protocol=SOCKET",
+            "--single-transaction",
+            "--routines",
+            "--events",
+            "--all-databases",
+        ]
+    elif Path("/usr/bin/mysqldump").is_file():
+        options["mysql"] = [
+            "/usr/bin/mysqldump",
+            *mysql_options(),
+            "--protocol=SOCKET",
+            "--single-transaction",
+            "--routines",
+            "--events",
+            "--all-databases",
+        ]
+    if Path("/usr/bin/pg_dumpall").is_file():
+        options["postgresql"] = [
+            "/usr/sbin/runuser",
+            "-u",
+            "postgres",
+            "--",
+            "/usr/bin/pg_dumpall",
+            "--no-password",
+        ]
+    mode = sys.argv[1]
+    if mode == "discover":
+        print(json.dumps(list(options)))
+        return 0
+    if mode in options:
+        os.execve(options[mode][0], options[mode], ENV)
+    return 126
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except OSError:
+        raise SystemExit(126) from None

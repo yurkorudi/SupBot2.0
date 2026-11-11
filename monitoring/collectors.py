@@ -13,22 +13,24 @@ SOURCE = Path(__file__).with_name("remote_collect.py").read_text(encoding="utf-8
 def collect_server(server):
     since = server.last_success_at or (utcnow() - timedelta(hours=4))
     stamp = int(since.replace(tzinfo=timezone.utc).timestamp())
+    services = server.services if server.service_monitoring_enabled else []
+    discover = server.service_monitoring_enabled
     command = (
         "python3 - "
-        + shlex.quote(json.dumps(server.services))
-        + f" {stamp} <<'SERVERWATCH_COLLECT'\n"
+        + shlex.quote(json.dumps(services))
+        + f" {stamp} {int(discover)} <<'SERVERWATCH_COLLECT'\n"
     )
     command += SOURCE + "\nSERVERWATCH_COLLECT"
     with connect(server) as client:
         try:
             if server.ssh_public_key:
-                payload = json.dumps({"services": server.services, "since": stamp})
+                payload = json.dumps({"services": services, "since": stamp, "discover": discover})
                 output = execute(client, "serverwatch-collect", timeout=90, input_data=payload)
             else:
                 output = execute(client, command, timeout=90)
             data = json.loads(output)
             for field in ("cpu_usage", "ram_percent", "swap_percent", "disk_percent"):
-                if not isinstance(data[field], (int, float)) or not math.isfinite(data[field]):
+                if type(data[field]) not in (int, float) or not math.isfinite(data[field]):
                     raise ValueError
                 if not 0 <= data[field] <= 100:
                     raise ValueError
@@ -40,7 +42,7 @@ def collect_server(server):
                 "disk_total",
                 "disk_used",
             ):
-                if not isinstance(data[field], int) or data[field] < 0:
+                if type(data[field]) is not int or data[field] < 0:
                     raise ValueError
             if not isinstance(data["details"], dict):
                 raise ValueError

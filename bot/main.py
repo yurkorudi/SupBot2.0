@@ -6,7 +6,7 @@ from datetime import timedelta
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramRetryAfter
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 
 from app import create_app
 from app.extensions import db
@@ -40,7 +40,9 @@ def claim_messages():
                 "group": row.group_id,
                 "text": row.message,
                 "alert_id": row.alert_id if critical else None,
+                "allow_swap": bool(critical and alert.alert_type == "ram"),
                 "attempts": row.attempts,
+                "edit_message_id": row.edit_message_id,
             }
         )
     db.session.commit()
@@ -62,11 +64,7 @@ async def deliver(bot, backend):
             messages = await backend.run(claim_messages)
             for item in messages:
                 try:
-                    await bot.send_message(
-                        item["group"],
-                        item["text"],
-                        reply_markup=alert_keyboard(item["alert_id"]) if item["alert_id"] else None,
-                    )
+                    await send_item(bot, item)
                     await backend.run(mark_message, item["id"], True)
                 except TelegramRetryAfter as error:
                     await backend.run(mark_message, item["id"], False, error.retry_after + 1)
@@ -81,6 +79,27 @@ async def deliver(bot, backend):
         except Exception as error:
             logger.error("Черга Telegram: %s", type(error).__name__)
         await asyncio.sleep(3)
+
+
+async def send_item(bot, item):
+    if item["edit_message_id"]:
+        try:
+            await bot.edit_message_text(
+                text=item["text"],
+                chat_id=item["group"],
+                message_id=item["edit_message_id"],
+            )
+            return
+        except TelegramBadRequest as error:
+            if "message is not modified" in error.message.lower():
+                return
+    await bot.send_message(
+        item["group"],
+        item["text"],
+        reply_markup=(
+            alert_keyboard(item["alert_id"], item["allow_swap"]) if item["alert_id"] else None
+        ),
+    )
 
 
 async def main():

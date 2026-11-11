@@ -1,0 +1,3 @@
+#!/bin/sh
+test -n "${SSH_TTY:-}" || exit 126
+exec /bin/bash --noprofile --rcfile /usr/local/lib/serverwatch/terminal.bashrc -i

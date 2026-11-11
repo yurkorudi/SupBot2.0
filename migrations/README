@@ -10,6 +10,14 @@ MySQL 8; automated migration tests also exercise SQLite.
 |---|---|---|
 | c99481d201d8 | None | Initial ServerWatch schema |
 | 4e2c9d8f610a | c99481d201d8 | Guided server setup, SSH key metadata, host-key pinning, and installation lifecycle fields |
+| f9b3c61de47a | 4e2c9d8f610a | Per-server Telegram schedules and durable next-run cursor |
+| 1d0c9ce02ce1 | f9b3c61de47a | Source and result status on the existing activity journal |
+| 6b8f3d58e15d | 1d0c9ce02ce1 | Discovered service inventory, monitoring choices, and restart timestamp |
+| b6c742151da3 | 6b8f3d58e15d | CPU recovery deadlines, Telegram notice, and boot verification |
+| a4f72c18c46d | b6c742151da3 | Swap switches, delayed jobs, and Telegram message editing |
+| e73c0f516911 | a4f72c18c46d | Daily backup state and verified archive metadata |
+| 7e8d452307a2 | e73c0f516911 | Encrypted terminal credentials and per-server owner |
+| 35166c40bfc0 | 7e8d452307a2 | Per-VPS automation and service monitoring switches |
 
 The setup-wizard migration preserves existing SSH credentials, Telegram group
 bindings, and monitoring history. Existing clients do not need to be reinstalled.

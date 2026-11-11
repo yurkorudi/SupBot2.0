@@ -116,8 +116,10 @@ def ensure_account():
     return account
 
 
-def key_addition(existing, public_key):
-    line = 'restrict,command="/usr/local/lib/serverwatch/ssh_dispatch.py" ' + public_key
+def key_addition(
+    existing, public_key, options='restrict,command="/usr/local/lib/serverwatch/ssh_dispatch.py"'
+):
+    line = options + " " + public_key
     blob = public_key.split()[1]
     matches = [entry.strip() for entry in existing.splitlines() if blob in entry.split()]
     if matches and matches != [line]:
@@ -127,7 +129,7 @@ def key_addition(existing, public_key):
     )
 
 
-def add_authorized_key(account, public_key):
+def add_authorized_key(account, public_key, *, terminal=False):
     home = os.open(account.pw_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         try:
@@ -158,7 +160,15 @@ def add_authorized_key(account, public_key):
                 existing = target.read(1024 * 1024 + 1)
                 if len(existing) > 1024 * 1024:
                     raise SetupError("authorized_keys перевищує дозволений розмір.")
-                addition = key_addition(existing, public_key)
+                addition = (
+                    key_addition(
+                        existing,
+                        public_key,
+                        'restrict,pty,command="/usr/local/lib/serverwatch/terminal-shell"',
+                    )
+                    if terminal
+                    else key_addition(existing, public_key)
+                )
                 if addition:
                     target.write(addition)
                     target.flush()
@@ -196,6 +206,53 @@ def host_public_key():
             ):
                 return " ".join(parts[:2])
     raise SetupError("Не знайдено публічного ключа активного SSH-хоста.")
+
+
+def ensure_terminal_account():
+    import grp
+    import pwd
+
+    username = "serverwatch-terminal"
+    home = "/var/lib/serverwatch-terminal"
+    try:
+        account = pwd.getpwnam(username)
+    except KeyError:
+        run_command(
+            [
+                "/usr/sbin/useradd",
+                "--system",
+                "--user-group",
+                "--create-home",
+                "--home-dir",
+                home,
+                "--shell",
+                "/bin/bash",
+                username,
+            ]
+        )
+        account = pwd.getpwnam(username)
+    if (
+        account.pw_uid == 0
+        or account.pw_gid == 0
+        or account.pw_dir != home
+        or account.pw_shell != "/bin/bash"
+        or any(
+            username in group.gr_mem and group.gr_gid != account.pw_gid for group in grp.getgrall()
+        )
+        or grp.getgrgid(account.pw_gid).gr_name != username
+    ):
+        raise SetupError("Обліковий запис термінала має непридатні права або налаштування.")
+    return account
+
+
+def write_sudo_rules(name, rule):
+    temporary = f"/usr/local/lib/serverwatch/{name}.sudoers.check"
+    write_asset(temporary, rule.encode(), 0o600)
+    try:
+        run_command(["/usr/sbin/visudo", "-cf", temporary])
+        write_asset(f"/etc/sudoers.d/{name}", rule.encode(), 0o440)
+    finally:
+        os.unlink(temporary)
 
 
 def install(config):
@@ -238,19 +295,52 @@ def install(config):
             write_asset(
                 filename,
                 base64.b64decode(encoded),
-                0o755 if filename.endswith("ssh_dispatch.py") else 0o644,
+                0o755
+                if filename.endswith(
+                    (
+                        "ssh_dispatch.py",
+                        "terminal-shell",
+                        "serverwatch-db-export",
+                        "serverwatch-docker-list",
+                    )
+                )
+                else 0o644,
             )
         if config["enable_swap"]:
             write_asset(
                 "/usr/local/sbin/serverwatch-swap", base64.b64decode(config["swap_helper"]), 0o755
             )
             rule = 'monitor ALL=(root) NOPASSWD: /usr/local/sbin/serverwatch-swap ""\n'
-            temporary = "/usr/local/lib/serverwatch/swap.sudoers.check"
-            write_asset(temporary, rule.encode(), 0o600)
-            run_command(["/usr/sbin/visudo", "-cf", temporary])
-            write_asset("/etc/sudoers.d/serverwatch-monitor-swap", rule.encode(), 0o440)
-            os.unlink(temporary)
+            if config.get("persistent_swap_helper"):
+                write_asset(
+                    "/usr/local/sbin/serverwatch-swap-persistent",
+                    base64.b64decode(config["persistent_swap_helper"]),
+                    0o755,
+                )
+                rule += (
+                    'monitor ALL=(root) NOPASSWD: /usr/local/sbin/serverwatch-swap-persistent ""\n'
+                )
+            write_sudo_rules("serverwatch-monitor-swap", rule)
+        rules = []
+        if config.get("enable_docker_inventory"):
+            rules.append('/usr/local/sbin/serverwatch-docker-list ""')
+        if config.get("enable_reboot"):
+            rules.append("/usr/bin/systemctl --no-block reboot")
+        if config.get("enable_database_backups"):
+            rules.extend(
+                f"/usr/local/sbin/serverwatch-db-export {mode}"
+                for mode in ("discover", "mysql", "mariadb", "postgresql")
+            )
+        if rules:
+            write_sudo_rules(
+                "serverwatch-monitor-operations",
+                "monitor ALL=(root) NOPASSWD: " + ", ".join(rules) + "\n",
+            )
         add_authorized_key(account, config["public_key"])
+        if config.get("terminal_public_key"):
+            add_authorized_key(
+                ensure_terminal_account(), config["terminal_public_key"], terminal=True
+            )
         phase = "ssh_config"
         host_key = host_public_key()
         notify(config, "completed", host_key=host_key)

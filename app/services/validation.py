@@ -46,7 +46,13 @@ def server_fields(form):
 
 
 def threshold_fields(form, defaults):
+    defaults = {
+        **defaults,
+        "cpu_critical": defaults.get("cpu_critical", max(95, defaults["cpu_warning"])),
+    }
     result = {key: integer(form.get(key, value), 1, 100, key) for key, value in defaults.items()}
+    if result["cpu_warning"] > result["cpu_critical"]:
+        raise ValueError("Критичний поріг CPU має бути не нижчим за поріг попередження.")
     for key in ("ram", "disk"):
         if result[key + "_warning"] >= result[key + "_critical"]:
             raise ValueError("Критичний поріг повинен перевищувати попереджувальний.")

@@ -1,13 +1,13 @@
 :root {
   color-scheme: dark;
-  --bg: #0c111b;
-  --panel: #131b29;
-  --input: #0e1522;
-  --line: #253044;
+  --bg: #101416;
+  --panel: #181e21;
+  --input: #111719;
+  --line: #2d383b;
   --text: #e8edf6;
   --muted: #8f9cb2;
-  --accent: #8b98ff;
-  --accent-bg: #7484ef;
+  --accent: #6fdec0;
+  --accent-bg: #236a55;
   --green: #48d7ab;
   --red: #f28b95;
   --amber: #e5bd74;
@@ -149,3 +149,28 @@ footer { border-top: 1px solid var(--line); padding: 18px 34px; color: var(--mut
 .badge.DISABLED { background: #39414a; color: #d5dce3; }
 button:disabled { opacity: .5; cursor: wait; }
 [hidden] { display: none !important; }
+.section-links { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+.section-links a { border: 1px solid var(--line); border-radius: 7px; padding: 8px 12px; }
+.section-links a:hover, .section-links a:focus-visible, .section-links a[aria-current] { border-color: var(--green); }
+.section-links a[aria-current] { background: rgba(72,215,171,.12); color: var(--accent); }
+.table-wrap tbody tr:hover { background: rgba(128,145,170,.05); }
+fieldset { display: flex; flex-wrap: wrap; gap: 12px; border: 1px solid var(--line); border-radius: 7px; }
+fieldset .check { margin: 4px 0; }
+.terminal-panel { background: #101614; color: #dcece3; min-width: 0; }
+.terminal-actions { flex-wrap: wrap; }
+.backup-checksum { overflow-wrap: anywhere; }
+#terminal-view { height: clamp(18rem, 61dvh, 48rem); min-width: 0; }
+.panel { box-shadow: 0 8px 24px rgba(0,0,0,.08); }
+.flash-stack { position: fixed; right: 16px; bottom: 16px; z-index: 8; width: min(26rem, calc(100vw - 32px)); }
+.flash-stack .notice { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 8px 0 0; box-shadow: 0 8px 24px rgba(0,0,0,.24); }
+.stat, button, .button, .section-links a { transition: background-color .15s, border-color .15s, filter .15s; }
+.stat:hover { border-color: var(--green); }
+.charts-grid[aria-busy="true"] .chart-box, .chart-box[aria-busy="true"] {
+  background: var(--input);
+  border-radius: 8px;
+  animation: loading-pulse 1.4s ease-in-out infinite alternate;
+}
+@keyframes loading-pulse { from { opacity: .45; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
